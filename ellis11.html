@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wormhole between two rooms</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden}
+body{background:#05070c;color:#e8edf6;font:14px system-ui,sans-serif}
+#stage{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;overflow:hidden;display:grid;place-items:center}
+canvas#view{display:block;width:min(100vw,177.7778dvh);height:auto;max-height:100dvh;aspect-ratio:16/9;background:#000;cursor:grab;touch-action:none}
+ #hud{position:fixed;left:14px;top:14px;z-index:99;pointer-events:none;
+      color:#fff;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:4px;
+      border:1px solid #2a394e;text-shadow:0 1px 4px #000;
+      font:14px ui-monospace,monospace;line-height:1.5;white-space:pre}
+/* top is offset to clear the browser bookmarks bar, which overlays the
+   viewport and was hiding the first slider. */
+#panel{position:absolute;right:12px;top:46px;width:min(240px,calc(100vw - 24px));max-height:calc(100dvh - 104px);overflow-y:auto;overflow-x:hidden;background:rgba(12,17,26,.92);border:1px solid #263347;border-radius:8px;padding:13px;backdrop-filter:blur(6px)}
+#panel.min{display:none}
+h1{font-size:13px;margin:0 0 8px;color:#a8e7ff}
+label{display:block;margin:10px 0 4px;color:#9fb0c8;font-size:11px}
+input[type=range]{width:100%}
+#keys{margin-top:10px;border-top:1px solid #2a394e;padding-top:9px;color:#7f8ea3;font-size:11px;line-height:1.55}
+kbd{background:#26364b;padding:1px 4px;border-radius:3px;color:#fff}
+#toggle{position:absolute;right:12px;bottom:12px;background:rgba(12,17,26,.8);border:1px solid #263347;color:#cfe;border-radius:5px;padding:5px 9px;cursor:pointer;font:11px system-ui}
+#infoBtn{position:fixed;left:12px;bottom:12px;z-index:101;background:rgba(12,17,26,.92);border:1px solid #38516e;color:#d9efff;border-radius:5px;padding:6px 11px;cursor:pointer;font:12px system-ui}
+#infoBox{position:fixed;left:12px;bottom:52px;z-index:100;width:min(620px,calc(100vw - 24px));max-height:68vh;overflow:auto;background:rgba(9,14,23,.97);border:1px solid #38516e;border-radius:8px;padding:16px 18px;box-shadow:0 8px 32px #000b;line-height:1.5}
+#infoBox[hidden]{display:none}
+#infoBox h2{font-size:16px;margin:0 34px 10px 0;color:#a8e7ff}
+#infoBox h3{font-size:12px;margin:13px 0 4px;color:#b9d2ef}
+#infoBox p{font-size:12px;margin:5px 0;color:#d1dae7}
+#infoBox code{font:12px ui-monospace,monospace;color:#d6e8ff}
+#infoClose{position:absolute;top:9px;right:10px;background:#1a2636;border:1px solid #38516e;color:#e8edf6;border-radius:4px;padding:3px 8px;cursor:pointer}
+</style></head>
+<body>
+<div id="stage">
+<canvas id="view" width="960" height="540"></canvas>
+<div id="hud"></div>
+<div id="panel">
+  <h1 id="ptitle">Wormhole between two rooms</h1>
+<label>Throat size (radius) &nbsp;<b id="av">1.00 m</b></label>
+ <input id="n_sl" type="range" min=".3" max="3" step=".05" value="1">
+  <label>Field of view &nbsp;<b id="fv">70</b>&deg;</label>
+  <input id="fov_sl" type="range" min="35" max="110" step="5" value="70">
+  <label>Ray steps &nbsp;<b id="qv">250</b></label>
+  <input id="q_sl" type="range" min="200" max="300" step="1" value="250">
+  <label>Wall grid line thickness &nbsp;<b id="gv">0.016</b></label>
+  <input id="g_sl" type="range" min="0.005" max="0.040" step="0.001" value="0.016">
+  <div id="note" style="margin-top:9px;color:#6f7d90;font-size:10.5px;line-height:1.5">
+    The slider sets the throat <i>radius</i> in metres, so the hole you see and
+    fly through grows and shrinks with it. Uses the symmetric Ellis throat with <i>m</i>&nbsp;=&nbsp;0.
+  </div>
+  <div id="keys">
+    <kbd>W</kbd>/<kbd>S</kbd> forward / back &nbsp; <kbd>A</kbd>/<kbd>D</kbd> strafe<br>
+    <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> up / down &nbsp; <kbd>Space</kbd>/<kbd>Ctrl</kbd> too<br>
+    Fly through the hole; <kbd>C</kbd> jump; <kbd>R</kbd> reset
+  </div>
+</div>
+<button id="toggle">panel</button>
+<button id="infoBtn" type="button" aria-expanded="false" aria-controls="infoBox">INFO</button>
+<section id="infoBox" role="dialog" aria-labelledby="infoTitle" hidden>
+  <button id="infoClose" type="button" aria-label="Close information">Close</button>
+  <h2 id="infoTitle">How this wormhole visualization works</h2>
+  <h3>Geometry and coordinates</h3>
+  <p>This model uses the symmetric, massless Ellis wormhole (m = 0). Its spatial metric is
+  <code>dl² + (l² + a²)dΩ²</code>. The parameter <code>a</code> is the throat radius, set by the
+  throat-size slider. The signed proper-radial coordinate <code>l</code> runs continuously
+  through the throat: red room for <code>l &lt; 0</code>, blue room for <code>l &gt; 0</code>, and the
+  throat at <code>l = 0</code>.</p>
+  <p>The areal radius is <code>r = √(l² + a²)</code>. It has its minimum value <code>a</code> at
+  the throat, so the camera never moves through a solid sphere's interior. The sign of
+  <code>l</code>, rather than a separate room switch or a crossfade, identifies the side.</p>
+  <h3>Camera movement</h3>
+  <p>Movement input is split into radial and sideways components in the local camera frame.
+  Radial motion changes <code>l</code>; sideways motion changes the angular position. The
+  displayed xyz position is reconstructed using <code>r</code>. The room changes when the
+  camera crosses <code>l = 0</code>. This is an interactive navigation control, not a model
+  of a freely falling observer.</p>
+  <h3>How the image is rendered</h3>
+  <p>A separate light ray is traced for each screen pixel. The ray's path is integrated in
+  the Ellis geometry with a fourth-order Runge–Kutta method, using the conserved impact
+  parameter to describe its angular motion. The ray is followed until it reaches a room
+  wall; that wall's red or blue color is selected from the sign of <code>l</code> at the hit.
+  This lets a view into the other room come from rays that actually pass through the throat.</p>
+  <h3>Controls and scope</h3>
+  <p><b>Ray steps</b> sets the number of integration steps per ray (more steps cost more
+  rendering time). <b>Wall grid line thickness</b> changes the drawn grid width; it is a
+  visual setting. The wall shading and grid are illustrative. This is a static ray-path
+  visualization, not a complete simulation of materials, reflected light, or time-dependent
+  gravitational physics.</p>
+</section>
+</div>
+<script>
+"use strict";
+// Any failure must be visible. A silent throw leaves a black canvas, which is
+// indistinguishable from "the render is just very dark".
+window.addEventListener('error', e => showFatal(e.message + ' (' + e.lineno + ':' + e.colno + ')'));
+function showFatal(msg){
+  const c = document.getElementById('view');
+  if(c){ c.style.background = '#2a0d0d'; }
+  const p = document.getElementById('panel');
+  if(p){
+    p.classList.remove('min');
+    p.innerHTML = '<h1 style="color:#ff9a9a">Error</h1><pre style="white-space:pre-wrap;' +
+                  'font:11px ui-monospace,monospace;color:#ffd7d7;margin:0">' +
+                  String(msg).replace(/[<&]/g, c2 => c2 === '<' ? '&lt;' : '&amp;') + '</pre>';
+  }
+}
+// ---------------------------------------------------------------- shader
+const VS = `
+attribute vec2 a_pos;
+void main(){ gl_Position = vec4(a_pos,0.0,1.0); }`;
+
+const FS = `
+precision highp float;
+uniform vec2 u_res;
+uniform vec3 u_cam;
+uniform float u_yaw;
+uniform float u_pitch;
+uniform float u_fov;
+uniform float u_n;
+uniform float u_near;
+uniform int u_steps;
+uniform float u_grid;
+
+const float PI=3.141592653589793;
+const int MAX_STEPS=320;
+const float ROOM=5.0;
+
+// m=0 Ellis wormhole: dl^2 + (l^2+a^2)dOmega^2.
+float a_of(float n){ return max(n,1e-4); }
+vec3 rotateAxis(vec3 v, vec3 axis, float angle){
+  float c=cos(angle), s=sin(angle);
+  return v*c+cross(axis,v)*s+axis*dot(axis,v)*(1.0-c);
+}
+
+vec3 roomColor(float idx){
+  float t=step(0.5,idx);
+  return mix(vec3(0.62,0.09,0.09),vec3(0.10,0.22,0.66),t);
+}
+
+float roomExit(vec3 ro, vec3 rd, out vec3 nrm){
+  float tBest=1e9;
+  nrm=vec3(0.0,0.0,1.0);
+  if(rd.x!=0.0){
+    float t=(rd.x>0.0?(ROOM-ro.x):(-ROOM-ro.x))/rd.x;
+    if(t>0.0&&t<tBest){tBest=t;nrm=vec3(1.0,0.0,0.0)*sign(rd.x);}
+  }
+  if(rd.y!=0.0){
+    float t=(rd.y>0.0?(ROOM-ro.y):(-ROOM-ro.y))/rd.y;
+    if(t>0.0&&t<tBest){tBest=t;nrm=vec3(0.0,1.0,0.0)*sign(rd.y);}
+  }
+  if(rd.z!=0.0){
+    float t=(rd.z>0.0?(ROOM-ro.z):(-ROOM-ro.z))/rd.z;
+    if(t>0.0&&t<tBest){tBest=t;nrm=vec3(0.0,0.0,1.0)*sign(rd.z);}
+  }
+  return tBest;
+}
+
+vec3 wallColor(vec3 p, vec3 nrm, float t, float idx){
+  vec3 base=roomColor(idx);
+  vec3 an=abs(nrm);
+  vec2 q;
+  if(an.x>0.5) q=p.yz;
+  else if(an.y>0.5) q=p.xz;
+  else q=p.xy;
+  float lw=u_grid*(1.0+0.22*t);
+  vec2 d=abs(fract(q+0.5)-0.5);
+  float line=1.0-smoothstep(0.0,lw,min(d.x,d.y));
+  vec3 Ldir=normalize(vec3(0.4,0.8,0.3));
+  float lam=0.55+0.45*max(0.0,dot(nrm,Ldir));
+  vec3 c=base*lam;
+  c=mix(c,vec3(0.02),line*0.95);
+  c*=1.0-0.16*smoothstep(2.0,9.0,t);
+  return c;
+}
+
+// State is (l, dl/ds, phi). For unit-energy null rays, b is conserved and
+// d2l/ds2=b^2*l/(l^2+a^2)^2; dphi/ds=b/(l^2+a^2).
+vec3 ellisDerivative(vec3 y,float b,float a){
+  float r2=y.x*y.x+a*a;
+  return vec3(y.y,b*b*y.x/(r2*r2),b/r2);
+}
+vec3 ellisRK4(vec3 y,float ds,float b,float a){
+  vec3 k1=ellisDerivative(y,b,a);
+  vec3 k2=ellisDerivative(y+0.5*ds*k1,b,a);
+  vec3 k3=ellisDerivative(y+0.5*ds*k2,b,a);
+  vec3 k4=ellisDerivative(y+ds*k3,b,a);
+  return y+(ds/6.0)*(k1+2.0*k2+2.0*k3+k4);
+}
+
+// Trace each pixel's light ray through the Ellis metric. The sign of l selects
+// the room copy, so the surface actually reached supplies the pixel radiance.
+vec3 traceEllisRay(vec3 origin,vec3 dir,float side,float a){
+  float r0=max(length(origin),a);
+  vec3 n0=length(origin)>1e-5?normalize(origin):vec3(0.0,0.0,1.0);
+  float mu=clamp(dot(dir,n0),-1.0,1.0);
+  vec3 tangent=dir-mu*n0;
+  float b=r0*length(tangent);
+  float sideSign=side<0.5?-1.0:1.0;
+  vec3 y=vec3(sideSign*sqrt(max(r0*r0-a*a,0.0)),sideSign*mu,0.0);
+  vec3 axis;
+  if(b>1e-6) axis=normalize(cross(n0,tangent));
+  else {
+    vec3 fallback=abs(n0.y)<0.9?vec3(0.0,1.0,0.0):vec3(1.0,0.0,0.0);
+    axis=normalize(cross(n0,fallback));
+  }
+  float path=0.0;
+  for(int i=0;i<MAX_STEPS;i++){
+    if(i>=u_steps) break;
+    float oldL=y.x;
+    float oldR=sqrt(oldL*oldL+a*a);
+    vec3 oldN=rotateAxis(n0,axis,y.z);
+    vec3 oldP=oldN*oldR;
+    float ds=min(0.12,0.035*oldR);
+    vec3 yn=ellisRK4(y,ds,b,a);
+    float newR=sqrt(yn.x*yn.x+a*a);
+    vec3 newN=rotateAxis(n0,axis,yn.z);
+    vec3 newP=newN*newR;
+    vec3 segment=newP-oldP;
+    float segmentLength=length(segment);
+    if(segmentLength>1e-6){
+      vec3 wallNormal;
+      vec3 segmentDir=segment/segmentLength;
+      float wallT=roomExit(oldP,segmentDir,wallNormal);
+      if(wallT>1e-5&&wallT<=segmentLength){
+        float hitT=clamp(wallT/segmentLength,0.0,1.0);
+        float hitL=mix(oldL,yn.x,hitT);
+        float roomIdx=hitL<0.0?0.0:1.0;
+        return wallColor(oldP+segmentDir*wallT,wallNormal,path+ds*hitT,roomIdx);
+      }
+    }
+    path+=ds;
+    y=yn;
+  }
+  return vec3(0.008,0.01,0.016);
+}
+
+void main(){
+  vec2 frag=gl_FragCoord.xy;
+  vec2 uv=(2.0*frag-u_res)/u_res.y;
+  float a=a_of(u_n);
+  float cp=cos(u_pitch),sp=sin(u_pitch);
+  vec3 fwd=vec3(sin(u_yaw)*cp,sp,-cos(u_yaw)*cp);
+  vec3 right=vec3(-fwd.z,0.0,fwd.x);
+  float rl=length(right);
+  right=rl<1e-4?vec3(1.0,0.0,0.0):right/rl;
+  vec3 upv=cross(right,fwd);
+  float k=1.0/tan(u_fov*0.5);
+  vec3 dir=normalize(fwd+right*(uv.x*k)+upv*(uv.y*k));
+  vec3 col=traceEllisRay(u_cam,dir,u_near,a);
+  float vig=1.0-0.18*dot(uv,uv)*0.5;
+  col*=vig;
+  col+=(fract(sin(dot(frag,vec2(12.9898,78.233)))*43758.5453)-0.5)/255.0;
+  gl_FragColor=vec4(pow(max(col,0.0),vec3(0.4545)),1.0);
+}`;
+
+// ---------------------------------------------------------------- setup
+const canvas = document.getElementById('view');
+const gl = canvas.getContext('webgl', {antialias:false, preserveDrawingBuffer:true});
+if(!gl){
+  showFatal('WebGL unavailable. Try a different browser or enable hardware acceleration.');
+  throw new Error('no webgl');
+}
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+    const log = gl.getShaderInfoLog(s);
+    showFatal('Shader compile failed:\n' + log);
+    console.error(log, src.split('\n').map((l,i)=>(i+1)+': '+l).join('\n'));
+    throw new Error('shader: '+log);
+  }
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){ showFatal('Link failed:\n' + gl.getProgramInfoLog(prog)); throw new Error('link'); }
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const U = {};
+for(const u of ['u_res','u_cam','u_yaw','u_pitch','u_fov','u_n','u_near','u_steps','u_grid'])
+  U[u] = gl.getUniformLocation(prog, u);
+
+const $ = id => document.getElementById(id);
+const ROOM = 5.0;
+let THROAT = 0.5;                 // aperture radius in metres, follows n
+let n = +$('n_sl').value;
+let fov = +$('fov_sl').value, quality = +$('q_sl').value;
+let gridThickness = +$('g_sl').value;
+
+$('n_sl').oninput = e => {
+  n=+e.target.value;
+  // the slider is the throat scale: it sets the aperture radius, so the hole
+  // you see and fly through actually grows and shrinks with it
+  THROAT = n;
+  if (typeof cam !== 'undefined') syncCameraPosition();
+  $('av').textContent = n.toFixed(2)+' m';
+};
+$('fov_sl').oninput= e => { fov=+e.target.value; $('fv').textContent=fov; };
+$('q_sl').oninput  = e => { quality=+e.target.value; $('qv').textContent=quality; };
+$('g_sl').oninput  = e => { gridThickness=+e.target.value; $('gv').textContent=gridThickness.toFixed(3); };
+
+// Camera coordinates use the signed Ellis proper-radial coordinate directly.
+// The displayed xyz position is the areal-radius embedding r=sqrt(l^2+a^2),
+// so it never enters r<a. The two room sheets are l<0 (red) and l>0 (blue).
+const cam = {p:[0,0,4], l:-Math.sqrt(16-n*n), yaw:0, pitch:0};
+let activeRoom = 0; // 0=red (l<0), 1=blue (l>0)
+function syncCameraPosition(){
+  const r=Math.sqrt(cam.l*cam.l+n*n), d=Math.hypot(...cam.p)||1;
+  cam.p=cam.p.map(v=>v*r/d);
+}
+function reset(){
+  cam.l=-Math.sqrt(Math.max(16-n*n,0));
+  cam.p=[0,0,Math.sqrt(cam.l*cam.l+n*n)];
+  cam.yaw=0; cam.pitch=0; activeRoom=0; clampCam();
+}
+clampCam();
+$('n_sl').oninput({target:$('n_sl')});
+$('q_sl').oninput({target:$('q_sl')});
+$('g_sl').oninput({target:$('g_sl')});
+
+function camFrame(){
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const f = [Math.sin(cam.yaw)*cp, sp, -Math.cos(cam.yaw)*cp];
+  let r = [-f[2], 0, f[0]];
+  const rl = Math.hypot(r[0], r[2]);
+  if(rl < 1e-5) r = [1,0,0]; else { r[0]/=rl; r[2]/=rl; }
+  const u = [ r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0] ];
+  return {f:f, r:r, u:u};
+}
+
+// Keep the camera inside the room box while preserving r^2=l^2+a^2.
+function clampCam(){
+  const L = ROOM - 0.35;
+  for(let i=0;i<3;i++) cam.p[i] = Math.max(-L, Math.min(L, cam.p[i]));
+  const r=Math.hypot(...cam.p);
+  cam.l=(cam.l<0?-1:1)*Math.sqrt(Math.max(r*r-n*n,0));
+}
+
+$('toggle').onclick = () => $('panel').classList.toggle('min');
+$('infoBtn').onclick = () => {
+  const box=$('infoBox'), open=box.hidden;
+  box.hidden=!open;
+  $('infoBtn').setAttribute('aria-expanded',String(open));
+};
+$('infoClose').onclick = () => {
+  $('infoBox').hidden=true;
+  $('infoBtn').setAttribute('aria-expanded','false');
+};
+
+// Drag the panel by its title, in case browser chrome covers more than the
+// CSS offset assumes. Position persists across reloads.
+(() => {
+  const p = $('panel'), t = $('ptitle');
+  const KEY = 'ellis.panel';
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved) { p.style.left = saved.l; p.style.top = saved.t; p.style.right = 'auto'; }
+  } catch (_) {}
+  let dx = 0, dy = 0, dragging = false;
+  t.style.cursor = 'grab';
+  t.addEventListener('pointerdown', e => {
+    dragging = true; t.setPointerCapture(e.pointerId);
+    const r = p.getBoundingClientRect();
+    dx = e.clientX - r.left; dy = e.clientY - r.top;
+    t.style.cursor = 'grabbing';
+  });
+  t.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    p.style.left = Math.max(0, e.clientX - dx) + 'px';
+    p.style.top  = Math.max(0, e.clientY - dy) + 'px';
+    p.style.right = 'auto';
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; t.style.cursor = 'grab';
+    try { localStorage.setItem(KEY, JSON.stringify({l:p.style.left, t:p.style.top})); } catch (_) {}
+  };
+  t.addEventListener('pointerup', end);
+  t.addEventListener('pointercancel', end);
+})();
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if(k === 'r') reset();
+  if(k === 'c'){ cam.l=-cam.l; activeRoom=cam.l<0?0:1; syncCameraPosition(); } // deliberate debug jump
+  $('panel').classList.remove('min');
+});
+
+// Mouse look: hold the left mouse button and move to look around.
+// The normal pointer remains visible; no pointer lock and no Escape required.
+let dragging=false, lastX=0, lastY=0;
+canvas.style.cursor='grab';
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return; // left mouse button only
+  dragging=true; lastX=e.clientX; lastY=e.clientY;
+  canvas.style.cursor='grabbing';
+  if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+});
+const stopLooking = () => {
+  dragging=false;
+  canvas.style.cursor='grab';
+};
+canvas.addEventListener('pointerup', stopLooking);
+canvas.addEventListener('pointercancel', stopLooking);
+canvas.addEventListener('lostpointercapture', stopLooking);
+canvas.addEventListener('pointermove', e => {
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  lastX=e.clientX; lastY=e.clientY;
+  cam.yaw   -= dx*0.005;
+  cam.pitch += dy*0.005;
+  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch));
+});
+
+// keys
+const held = {};
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  held[k] = true;
+  // stop the arrows from scrolling the page
+  if(k.indexOf('arrow') === 0 || k === ' ') e.preventDefault();
+});
+window.addEventListener('keyup',   e => held[e.key.toLowerCase()]=false);
+window.addEventListener('blur',    () => Object.keys(held).forEach(k=>held[k]=false));
+
+function fly(dt){
+  const speed = (held['shift']?14:4.5)*dt;
+  let fw=0, sd=0, vt=0;
+  if(held['w'])               fw+=1;     // W forward
+  if(held['s'])               fw-=1;     // S reverse
+  if(held['d']||held['arrowright']) sd+=1;
+  if(held['a']||held['arrowleft'])  sd-=1;
+  if(held['arrowup'])         vt+=1;     // up arrow   -> up
+  if(held['arrowdown'])       vt-=1;     // down arrow -> down
+  if(held[' '])               vt+=1;
+  if(held['control'])         vt-=1;
+  if(!fw && !sd && !vt) return;
+  // Integrate controlled motion in the Ellis orthonormal frame. Radial travel
+  // changes l; angular travel changes direction on the areal-radius sphere.
+  const inputMag=Math.hypot(fw,sd,vt);
+  const totalDistance=speed*inputMag;
+  const count=Math.max(1,Math.ceil(totalDistance/0.04));
+  const stepSpeed=speed/count;
+  for(let step=0;step<count;step++){
+    const F=camFrame();
+    const r=Math.hypot(...cam.p), radial=cam.p.map(v=>v/r);
+    const norm= inputMag>1 ? 1/inputMag : 1;
+    const move=[0,1,2].map(i=>norm*(fw*F.f[i]+sd*F.r[i]+vt*F.u[i]));
+    const radialSpeed=dot3(move,radial);
+    const tangent=move.map((v,i)=>v-radialSpeed*radial[i]);
+    const tangentSpeed=Math.hypot(...tangent);
+    const ds=stepSpeed;
+    const oldL=cam.l;
+    cam.l += (oldL<0?-1:1)*radialSpeed*ds;
+
+    // Move the angular direction on S^2. Keep the user's view orientation
+    // fixed while strafing; only the throat chart crossing remaps its radial
+    // component below.
+    if(tangentSpeed>1e-9){
+      const axis=norm3(cross3(radial,tangent));
+      const angle=tangentSpeed*ds/Math.max(r,1e-8);
+      radial.splice(0,3,...rotate3(radial,axis,angle));
+    }
+    cam.p=radial.map(v=>v*Math.sqrt(cam.l*cam.l+n*n));
+
+    // At l=0 the areal radius has a smooth minimum. The radial component of
+    // chart-space vectors reverses as the path continues onto the other sheet.
+    if((oldL<0 && cam.l>=0)||(oldL>0 && cam.l<=0)){
+      const FF=camFrame(), f=FF.f.map((v,i)=>v-2*dot3(FF.f,radial)*radial[i]);
+      updateViewFromForward(f);
+      activeRoom=cam.l<0?0:1;
+    }
+    clampCam();
+  }
+}
+
+function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+function cross3(a,b){return [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function norm3(a){const l=Math.hypot(...a)||1;return a.map(v=>v/l);}
+function rotate3(v,axis,angle){
+  const c=Math.cos(angle), sn=Math.sin(angle), axv=cross3(axis,v), d=dot3(axis,v);
+  return v.map((x,i)=>x*c+axv[i]*sn+axis[i]*d*(1-c));
+}
+function updateViewFromForward(f){
+  const v=norm3(f); cam.yaw=Math.atan2(v[0],-v[2]); cam.pitch=Math.asin(Math.max(-1,Math.min(1,v[1])));
+}
+// Keep room identity discrete: red room 1 or blue room 2.
+function nearRoom(){ return activeRoom; }
+function ellisL(){ return cam.l; }
+
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now;
+  fly(dt);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.uniform2f(U.u_res, canvas.width, canvas.height);
+  gl.uniform3f(U.u_cam, cam.p[0], cam.p[1], cam.p[2]);
+  gl.uniform1f(U.u_yaw, cam.yaw);
+  gl.uniform1f(U.u_pitch, cam.pitch);
+  gl.uniform1f(U.u_fov, fov*Math.PI/180);
+  gl.uniform1f(U.u_n, n);
+  gl.uniform1f(U.u_near, nearRoom());
+  gl.uniform1i(U.u_steps, quality);
+  gl.uniform1f(U.u_grid, gridThickness);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  // Show the signed Ellis proper-radial coordinate; l=0 is the throat.
+  document.getElementById('hud').textContent =
+    'x  ' + cam.p[0].toFixed(2) + ' m\n' +
+    'y  ' + cam.p[1].toFixed(2) + ' m\n' +
+    'z  ' + cam.p[2].toFixed(2) + ' m\n' +
+    'l  ' + ellisL().toFixed(2) + ' m\n' +
+    'room ' + (activeRoom === 0 ? 'RED' : 'BLUE');
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
