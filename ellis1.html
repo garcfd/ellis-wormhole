@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wormhole between two rooms</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+body{margin:0;background:#05070c;color:#e8edf6;font:14px system-ui,sans-serif}
+#stage{position:relative;width:100%}
+canvas#view{display:block;width:100%;height:auto;background:#000;cursor:grab;touch-action:none}
+ #hud{position:fixed;left:14px;top:14px;z-index:99;pointer-events:none;
+      color:#fff;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:4px;
+      border:1px solid #2a394e;text-shadow:0 1px 4px #000;
+      font:14px ui-monospace,monospace;line-height:1.5;white-space:pre}
+/* top is offset to clear the browser bookmarks bar, which overlays the
+   viewport and was hiding the first slider. */
+#panel{position:absolute;right:12px;top:46px;width:236px;max-height:calc(100% - 96px);overflow-y:auto;background:rgba(12,17,26,.92);border:1px solid #263347;border-radius:8px;padding:13px;backdrop-filter:blur(6px)}
+#panel.min{display:none}
+h1{font-size:13px;margin:0 0 8px;color:#a8e7ff}
+label{display:block;margin:10px 0 4px;color:#9fb0c8;font-size:11px}
+input[type=range]{width:100%}
+#keys{margin-top:10px;border-top:1px solid #2a394e;padding-top:9px;color:#7f8ea3;font-size:11px;line-height:1.55}
+kbd{background:#26364b;padding:1px 4px;border-radius:3px;color:#fff}
+#toggle{position:absolute;right:12px;bottom:12px;background:rgba(12,17,26,.8);border:1px solid #263347;color:#cfe;border-radius:5px;padding:5px 9px;cursor:pointer;font:11px system-ui}
+</style></head>
+<body>
+<div id="stage">
+<canvas id="view" width="960" height="540"></canvas>
+<div id="hud"></div>
+<div id="panel">
+  <h1 id="ptitle">Wormhole between two rooms</h1>
+<label>Throat size (radius) &nbsp;<b id="av">1.00 m</b></label>
+ <input id="n_sl" type="range" min=".3" max="3" step=".05" value="1">
+  <label>Field of view &nbsp;<b id="fv">70</b>&deg;</label>
+  <input id="fov_sl" type="range" min="35" max="110" step="5" value="70">
+  <label>Quality &nbsp;<b id="qv">medium</b></label>
+  <input id="q_sl" type="range" min="0" max="2" step="1" value="1">
+  <div id="note" style="margin-top:9px;color:#6f7d90;font-size:10.5px;line-height:1.5">
+    The slider sets the throat <i>radius</i> in metres, so the hole you see and
+    fly through grows and shrinks with it. The solution is pinned to the
+    symmetric case <i>m</i>&nbsp;=&nbsp;0.
+  </div>
+  <div id="keys">
+    <kbd>W</kbd>/<kbd>S</kbd> forward / back &nbsp; <kbd>A</kbd>/<kbd>D</kbd> strafe<br>
+    <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> up / down &nbsp; <kbd>Space</kbd>/<kbd>Ctrl</kbd> too<br>
+    Fly <i>through</i> the hole to reach the other room &nbsp; <kbd>C</kbd> jump &nbsp; <kbd>R</kbd> reset
+  </div>
+</div>
+<button id="toggle">panel</button>
+</div>
+<script>
+"use strict";
+// Any failure must be visible. A silent throw leaves a black canvas, which is
+// indistinguishable from "the render is just very dark".
+window.addEventListener('error', e => showFatal(e.message + ' (' + e.lineno + ':' + e.colno + ')'));
+function showFatal(msg){
+  const c = document.getElementById('view');
+  if(c){ c.style.background = '#2a0d0d'; }
+  const p = document.getElementById('panel');
+  if(p){
+    p.classList.remove('min');
+    p.innerHTML = '<h1 style="color:#ff9a9a">Error</h1><pre style="white-space:pre-wrap;' +
+                  'font:11px ui-monospace,monospace;color:#ffd7d7;margin:0">' +
+                  String(msg).replace(/[<&]/g, c2 => c2 === '<' ? '&lt;' : '&amp;') + '</pre>';
+  }
+}
+// ---------------------------------------------------------------- shader
+const VS = `
+attribute vec2 a_pos;
+void main(){ gl_Position = vec4(a_pos,0.0,1.0); }`;
+
+const FS = `
+precision highp float;
+uniform vec2  u_res;
+uniform vec3  u_cam;      // camera position in room coordinates (metres)
+uniform float u_yaw;
+uniform float u_pitch;
+uniform float u_fov;
+uniform float u_m;        // throat offset: throat sits at rho = m, and tilts
+                          // the redshift 1-f^2 between the two mouths
+uniform float u_n;        // solution parameter (sets throat scale a)
+uniform float u_near;     // 0 = camera in room1 (red), 1 = room2 (blue)
+uniform int   u_steps;
+
+const float PI = 3.141592653589793;
+const int   MAX_STEPS = 640;
+const float ROOM   = 5.0;     // 10m cube -> walls at +/-5
+uniform float u_rhole;    // aperture radius in metres (from the n slider)
+
+// ---- Ellis-Drainier solution functions (mirror of ellis.py) -------------
+float a_of(float m, float n){ return sqrt(max(n*n - m*m, 0.0)); }
+
+float psi_angle(float rho, float m, float a){
+  return 0.5*PI - atan((rho - m)/a);
+}
+
+// 1 - f^2, the redshift factor. Strictly between 0 and 1 on both sides, which
+// is exactly why there is no horizon: unlike 1-2M/r it never reaches zero.
+float gg(float rho, float m, float n, float a){
+  return exp(-(2.0*m/a) * psi_angle(rho, m, a));
+}
+
+float radius(float rho, float m, float n, float a){
+  return sqrt((rho - m)*(rho - m) + a*a) * exp((m/a) * psi_angle(rho, m, a));
+}
+
+// The radial barrier psi(rho) = (1-f^2) L^2 / r^2. A ray is confined to
+// E^2 >= psi, so where this drops below 1 the ray turns around.
+float potential(float rho, float m, float n, float a, float L){
+  return gg(rho,m,n,a) * L*L / (radius(rho,m,n,a)*radius(rho,m,n,a));
+}
+
+// ---- geodesic sweep --------------------------------------------------
+// Integrate d(psi)/d rho = (d psi/d lam)/(d rho/d lam) inward. d psi/d lam is
+// -L/r^2 and d rho/d lam is -sqrt(E^2 - psi), so the ratio is
+// L / (r^2 sqrt(E^2 - psi)) with E = 1. For a flat space this integrates to
+// exactly pi over a half-orbit, which the flat-space check in ellis.py
+// verifies independently.
+//
+// Returns x = the total polar sweep (negative), y = 1 if the ray reached the
+// throat. Transliteration of the sweep validated by check_shader_sweep.py
+// against ellis.half_sweep(); agreement is ~1e-5 for most impact parameters.
+vec2 sweep(float L, float m, float n, float a, int steps){
+  float throat = m;
+  // Match ellis.half_sweep's starting radius so the two agree. It sets
+  // rho_max = 50*max(n,1) + 50*|m|; using a different far cutoff shifts every
+  // sweep by a small constant that does not shrink with more steps.
+  float far    = 50.0*max(n,1.0) + 50.0*abs(m);
+  const float THRESH = 1e-4;
+  float acc    = 0.0;
+  const int N_IN = 64;               // inner s-substitution samples
+
+  float logLo = log(max(far, throat*2.0 + 1e-3));
+  float logHi = log(max(throat, throat*1e-3) + 1e-6);
+  if(logHi >= logLo){ return vec2(0.0, 0.0); }
+
+  float prevRho = far;
+  float prevVal = 0.0;
+  bool  reached = false;
+  float rTurn   = -1.0;
+
+  // Phase 1: log-spaced trapezoid, stopped before the turning-point
+  // singularity. Integrating the plain rule into 1-potential -> 0 makes every
+  // near-turn step blow up, which is what produced sweeps of -4700.
+  // Loop bound must be a compile-time constant under GLSL ES 1.00 (WebGL1's
+  // Appendix A restriction), so bound it at the max and break on the uniform.
+  for(int i=1;i<=MAX_STEPS;i++){
+    if(i>steps) break;
+    float rho = exp(mix(logLo, logHi, float(i)/float(steps)));
+    if(rho <= throat){ reached = true; break; }
+    float om = 1.0 - potential(rho,m,n,a,L);
+    if(om < THRESH){
+      // turning point bracketed between prevRho (allowed) and rho (blocked)
+      float lo = prevRho, hi = rho;
+      for(int b=0;b<24;b++){
+        float mid = 0.5*(lo+hi);
+        if(1.0 - potential(mid,m,n,a,L) > 0.0) lo = mid; else hi = mid;
+      }
+      rTurn = 0.5*(lo+hi);
+      break;
+    }
+    float val = L / (radius(rho,m,n,a)*radius(rho,m,n,a) * sqrt(om));
+    acc += 0.5*(prevVal + val) * (prevRho - rho);
+    prevRho = rho;
+    prevVal = val;
+  }
+  if(rTurn < 0.0){
+    // ran out of grid with no turning point -> through the throat
+    return vec2(-acc, 1.0);
+  }
+
+  // Phase 2: last stretch from the turning radius out to prevRho, in s with
+  // rho = rTurn + delta*s^2, which is flat in s. s=0 from the analytic limit.
+  float delta = prevRho - rTurn;
+  if(delta > 0.0){
+    float h[N_IN+1];
+    for(int j=0;j<=N_IN;j++){
+      float s = float(j)/float(N_IN);
+      float rs = rTurn + delta*s*s;
+      float kap = -sqrt(max(1.0 - potential(rs,m,n,a,L), 0.0));
+      if(kap > -1e-300) kap = -1e-300;
+      h[j] = (-L / (radius(rs,m,n,a)*radius(rs,m,n,a)) / kap) * (2.0*delta*s);
+    }
+    h[0] = 0.0;
+    float eps = 1e-6;
+    float C = -(potential(rTurn+eps,m,n,a,L) - potential(rTurn-eps,m,n,a,L)) / (2.0*eps);
+    if(C > 0.0){
+      h[0] = 2.0*(L/(radius(rTurn,m,n,a)*radius(rTurn,m,n,a))) * sqrt(delta/C);
+    }
+    float inner = 0.0;
+    for(int j=0;j<N_IN;j++){
+      inner += 0.5*(h[j]+h[j+1]) * (1.0/float(N_IN));
+    }
+    acc += abs(inner);
+  }
+  return vec2(-acc, 0.0);
+}
+
+// ---- rooms ------------------------------------------------------------
+// room1 is red, room2 is blue. index 0 -> red, 1 -> blue.
+vec3 roomColor(float idx){
+  return (idx < 0.5) ? vec3(0.62,0.09,0.09) : vec3(0.10,0.22,0.66);
+}
+
+// Distance from a ray (inside the box) to the wall it hits, and that wall's
+// outward normal. The room is the axis-aligned box [-5,5]^3.
+float roomExit(vec3 ro, vec3 rd, out vec3 nrm){
+  float tBest = 1e9;
+  nrm = vec3(0.0,0.0,1.0);
+  if(rd.x != 0.0){
+    float t = (rd.x > 0.0 ? (ROOM - ro.x) : (-ROOM - ro.x)) / rd.x;
+    if(t > 0.0 && t < tBest){ tBest = t; nrm = vec3(1.0,0.0,0.0) * sign(rd.x); }
+  }
+  if(rd.y != 0.0){
+    float t = (rd.y > 0.0 ? (ROOM - ro.y) : (-ROOM - ro.y)) / rd.y;
+    if(t > 0.0 && t < tBest){ tBest = t; nrm = vec3(0.0,1.0,0.0) * sign(rd.y); }
+  }
+  if(rd.z != 0.0){
+    float t = (rd.z > 0.0 ? (ROOM - ro.z) : (-ROOM - ro.z)) / rd.z;
+    if(t > 0.0 && t < tBest){ tBest = t; nrm = vec3(0.0,0.0,1.0) * sign(rd.z); }
+  }
+  return tBest;
+}
+
+// Ray-sphere against the throat aperture (centre = room centre, radius 0.5m).
+// Returns the near hit distance, or -1 if it misses.
+float throatHit(vec3 ro, vec3 rd){
+  float b = dot(ro, rd);
+  float c = dot(ro,ro) - u_rhole*u_rhole;
+  float disc = b*b - c;
+  if(disc < 0.0) return -1.0;
+  float sq = sqrt(disc);
+  float t = -b - sq;
+  if(t < 0.0) t = -b + sq;   // camera inside the sphere (clamped away in JS)
+  return t;
+}
+
+// Wall shading: flat room colour with a black 1m grid (10x10 over 10m).
+vec3 wallColor(vec3 p, vec3 nrm, float t, float idx){
+  vec3 base = roomColor(idx);
+  vec3 an = abs(nrm);
+  vec2 q;
+  if(an.x > 0.5)      q = p.yz;
+  else if(an.y > 0.5) q = p.xz;
+  else                q = p.xy;
+  // distance to nearest 1m gridline; widen slightly with distance to avoid moire
+  float lw = 0.016 + 0.0035*t;
+  vec2 d = abs(fract(q + 0.5) - 0.5);
+  float line = 1.0 - smoothstep(0.0, lw, min(d.x, d.y));
+  // soft key light so the cube reads as 3D
+  vec3 Ldir = normalize(vec3(0.4,0.8,0.3));
+  float lam = 0.55 + 0.45*max(0.0, dot(nrm, Ldir));
+  vec3 c = base * lam;
+  c = mix(c, vec3(0.02,0.02,0.02), line*0.95);      // black grid
+  c *= 1.0 - 0.16*smoothstep(2.0, 9.0, t);            // gentle depth falloff
+  return c;
+}
+
+void main(){
+  vec2 frag = gl_FragCoord.xy;
+  vec2 uv = (2.0*frag - u_res) / u_res.y;
+
+  float m = u_m;
+  float n = u_n;
+  float a = a_of(m, n);
+  float near = u_near;   // 0 = room1 (red) near, 1 = room2 (blue) near
+
+  // ---- camera frame (room / world space) ----
+  float cp = cos(u_pitch), sp = sin(u_pitch);
+  vec3 fwd = vec3(sin(u_yaw)*cp, sp, -cos(u_yaw)*cp);
+  vec3 right = vec3(-fwd.z, 0.0, fwd.x);
+  float rl = length(right);
+  right = (rl < 1e-4) ? vec3(1.0,0.0,0.0) : right/rl;
+  vec3 upv = cross(right, fwd);
+
+  float k = 1.0/tan(u_fov*0.5);
+  vec3 dir = normalize(fwd + right*(uv.x*k) + upv*(uv.y*k));
+
+  vec3 col;
+  float tSph = throatHit(u_cam, dir);
+
+  if(tSph > 0.0){
+    // The ray enters the 1m aperture -> it emerges in the far room, lensed by
+    // the Ellis metric. Trace the deflected ray from the entry point through
+    // the far room's walls.
+    vec3 P = u_cam + dir*tSph;                     // entry point on the sphere
+    float u = -dot(u_cam, dir);                    // closest approach to centre
+    vec3 Q = u_cam + dir*max(u, 0.0);
+    float b = length(Q);                           // impact parameter
+    vec2 sw = sweep(b, m, n, a, u_steps);
+    float theta = 2.0*sw.x;                        // total deflection sweep
+    // Deflection lies in the plane containing the ray and the throat centre;
+    // rotate the exit direction about that plane's normal.
+    vec3 ahat = (b > 1e-6) ? Q/b : vec3(0.0,1.0,0.0);
+    vec3 axis = cross(dir, ahat);
+    float al = length(axis);
+    axis = (al > 1e-6) ? axis/al : vec3(0.0,1.0,0.0);
+    vec3 fdir = normalize(dir*cos(theta) + cross(axis, dir)*sin(theta));
+    // enter the far room at the corresponding point and hit its wall
+    vec3 fn; float tf = roomExit(P, fdir, fn);
+    col = wallColor(P + fdir*tf, fn, tf, 1.0 - near);
+    // glassy spherical illusion: fresnel rim on the aperture
+    vec3 nsp = normalize(P);
+    float fres = pow(1.0 - abs(dot(dir, nsp)), 3.0);
+    col = mix(col, vec3(0.75,0.85,1.0), 0.35*fres);
+  } else {
+    // misses the aperture -> hits this room's wall
+    vec3 wn; float tw = roomExit(u_cam, dir, wn);
+    col = wallColor(u_cam + dir*tw, wn, tw, near);
+  }
+
+  // vignette + dither to hide banding
+  float vig = 1.0 - 0.18*dot(uv,uv)*0.5;
+  col *= vig;
+  col += (fract(sin(dot(frag, vec2(12.9898,78.233)))*43758.5453) - 0.5)/255.0;
+  gl_FragColor = vec4(pow(max(col,0.0), vec3(0.4545)), 1.0);
+}`;
+
+// ---------------------------------------------------------------- setup
+const canvas = document.getElementById('view');
+const gl = canvas.getContext('webgl', {antialias:false, preserveDrawingBuffer:true});
+if(!gl){
+  showFatal('WebGL unavailable. Try a different browser or enable hardware acceleration.');
+  throw new Error('no webgl');
+}
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+    const log = gl.getShaderInfoLog(s);
+    showFatal('Shader compile failed:\n' + log);
+    console.error(log, src.split('\n').map((l,i)=>(i+1)+': '+l).join('\n'));
+    throw new Error('shader: '+log);
+  }
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){ showFatal('Link failed:\n' + gl.getProgramInfoLog(prog)); throw new Error('link'); }
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const U = {};
+for(const u of ['u_res','u_cam','u_yaw','u_pitch','u_fov','u_m','u_n','u_near','u_steps','u_rhole'])
+  U[u] = gl.getUniformLocation(prog, u);
+
+const $ = id => document.getElementById(id);
+const ROOM = 5.0;
+let THROAT = 0.5;                 // aperture radius in metres, follows n
+const m = 0.0;                 // pinned to the symmetric case; no control for it
+let n = +$('n_sl').value;
+let fov = +$('fov_sl').value, quality = +$('q_sl').value;
+const STEPS = [220, 380, 560];
+const a_of = (mm, nn) => Math.sqrt(Math.max(nn*nn - mm*mm, 0.0));
+
+$('n_sl').oninput = e => {
+  n=+e.target.value;
+  // the slider is the throat scale: it sets the aperture radius, so the hole
+  // you see and fly through actually grows and shrinks with it
+  THROAT = n;
+  $('av').textContent = n.toFixed(2)+' m';
+};
+$('fov_sl').oninput= e => { fov=+e.target.value; $('fv').textContent=fov; };
+$('q_sl').oninput  = e => { quality=+e.target.value; $('qv').textContent=['low','medium','high'][quality]; };
+$('n_sl').oninput({target:$('n_sl')});
+
+// ---- camera: free flight inside the 10m room -------------------------
+// The two rooms are the same 10m cube in xyz, separated along the fourth
+// dimension w. Room 1 is centred at w = 0, room 2 at w = W_SEP. The throat
+// sits at the room centre, so flying through it means crossing w = W_SEP/2:
+// below that plane you are in one room, above it you are in the other.
+const W_SEP = 60.0;                  // separation of the two rooms in w
+const W_MID = W_SEP * 0.5;            // the throat plane
+
+const cam = {p:[0,0,4], w:0.0, yaw:0, pitch:0};   // w is a real coordinate
+function reset(){
+  cam.p=[0,0,4]; cam.w=0.0; cam.yaw=0; cam.pitch=0; clampCam();
+}
+clampCam();
+
+function camFrame(){
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const f = [Math.sin(cam.yaw)*cp, sp, -Math.cos(cam.yaw)*cp];
+  let r = [-f[2], 0, f[0]];
+  const rl = Math.hypot(r[0], r[2]);
+  if(rl < 1e-5) r = [1,0,0]; else { r[0]/=rl; r[2]/=rl; }
+  const u = [ r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0] ];
+  return {f:f, r:r, u:u};
+}
+
+// Keep the camera inside the room box. The aperture is NOT clamped: you are
+// meant to fly through it, and crossing the throat plane swaps rooms.
+function clampCam(){
+  const L = ROOM - 0.35;
+  for(let i=0;i<3;i++) cam.p[i] = Math.max(-L, Math.min(L, cam.p[i]));
+}
+
+$('toggle').onclick = () => $('panel').classList.toggle('min');
+
+// Drag the panel by its title, in case browser chrome covers more than the
+// CSS offset assumes. Position persists across reloads.
+(() => {
+  const p = $('panel'), t = $('ptitle');
+  const KEY = 'ellis.panel';
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved) { p.style.left = saved.l; p.style.top = saved.t; p.style.right = 'auto'; }
+  } catch (_) {}
+  let dx = 0, dy = 0, dragging = false;
+  t.style.cursor = 'grab';
+  t.addEventListener('pointerdown', e => {
+    dragging = true; t.setPointerCapture(e.pointerId);
+    const r = p.getBoundingClientRect();
+    dx = e.clientX - r.left; dy = e.clientY - r.top;
+    t.style.cursor = 'grabbing';
+  });
+  t.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    p.style.left = Math.max(0, e.clientX - dx) + 'px';
+    p.style.top  = Math.max(0, e.clientY - dy) + 'px';
+    p.style.right = 'auto';
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; t.style.cursor = 'grab';
+    try { localStorage.setItem(KEY, JSON.stringify({l:p.style.left, t:p.style.top})); } catch (_) {}
+  };
+  t.addEventListener('pointerup', end);
+  t.addEventListener('pointercancel', end);
+})();
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if(k === 'r') reset();
+  if(k === 'c'){ cam.w = cam.w > W_MID ? 0.0 : W_SEP; }   // jump to the other room
+  $('panel').classList.remove('min');
+});
+
+// look
+let dragging=false, lastX=0, lastY=0;
+canvas.addEventListener('pointerdown', e => { dragging=true; lastX=e.clientX; lastY=e.clientY; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup',   () => dragging=false);
+canvas.addEventListener('pointercancel',() => dragging=false);
+canvas.addEventListener('pointermove', e => {
+  if(!dragging) return;
+  cam.yaw   -= (e.clientX-lastX)*0.005;
+  cam.pitch += (e.clientY-lastY)*0.005;
+  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch));
+  lastX=e.clientX; lastY=e.clientY;
+});
+
+// keys
+const held = {};
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  held[k] = true;
+  // stop the arrows from scrolling the page
+  if(k.indexOf('arrow') === 0 || k === ' ') e.preventDefault();
+});
+window.addEventListener('keyup',   e => held[e.key.toLowerCase()]=false);
+window.addEventListener('blur',    () => Object.keys(held).forEach(k=>held[k]=false));
+
+function fly(dt){
+  const speed = (held['shift']?14:4.5)*dt;
+  let fw=0, sd=0, vt=0;
+  if(held['w'])               fw+=1;     // W forward
+  if(held['s'])               fw-=1;     // S reverse
+  if(held['d']||held['arrowright']) sd+=1;
+  if(held['a']||held['arrowleft'])  sd-=1;
+  if(held['arrowup'])         vt+=1;     // up arrow   -> up
+  if(held['arrowdown'])       vt-=1;     // down arrow -> down
+  if(held[' '])               vt+=1;
+  if(held['control'])         vt-=1;
+  if(!fw && !sd && !vt) return;
+  const F = camFrame();
+  const px = cam.p[0], py = cam.p[1], pz = cam.p[2];
+  for(let i=0;i<3;i++) cam.p[i] += speed*( fw*F.f[i] + sd*F.r[i] + vt*F.u[i] );
+  clampCam();
+  // how far we actually moved this frame (clamp may have eaten some of it)
+  const moved = Math.hypot(cam.p[0]-px, cam.p[1]-py, cam.p[2]-pz);
+  advanceW(moved);
+}
+
+// Passing through the wormhole moves you along the fourth dimension w.
+//
+// While the camera is inside the 1m aperture, w advances continuously toward
+// the other room, in proportion to how far you actually move. On the frame w
+// crosses the mid-plane (W_MID) you emerge on the far side of the throat: the
+// position is mirrored through the room centre, and you keep facing the same
+// way, so you come out travelling away from the hole rather than in front of
+// it. That mirroring is what stops the old blue/red/blue flicker.
+function advanceW(moved){
+  const d = Math.hypot(cam.p[0], cam.p[1], cam.p[2]);
+  if(d >= THROAT) return;                     // outside the aperture: no travel in w
+  const wasBelow = cam.w < W_MID;
+  // travel in w toward the *other* room: up if we are below, down if above
+  const dir = wasBelow ? 1.0 : -1.0;
+  // crossing 2*THROAT of throat covers the full room separation
+  cam.w += dir * moved * (W_SEP / (2.0*THROAT));
+  if(cam.w < 0.0) cam.w = 0.0;
+  if(cam.w > W_SEP) cam.w = W_SEP;
+  // did we just cross the throat plane? if so, emerge on the far side
+  if(wasBelow !== (cam.w < W_MID)){
+    for(let i=0;i<3;i++) cam.p[i] = -cam.p[i];   // mirror through room centre
+  }
+}
+
+// which room we are in, derived from the real coordinate
+function nearRoom(){ return cam.w > W_MID ? 1.0 : 0.0; }
+
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now;
+  fly(dt);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.uniform2f(U.u_res, canvas.width, canvas.height);
+  gl.uniform3f(U.u_cam, cam.p[0], cam.p[1], cam.p[2]);
+  gl.uniform1f(U.u_yaw, cam.yaw);
+  gl.uniform1f(U.u_pitch, cam.pitch);
+  gl.uniform1f(U.u_fov, fov*Math.PI/180);
+  gl.uniform1f(U.u_m, m);
+  gl.uniform1f(U.u_n, n);
+  gl.uniform1f(U.u_rhole, THROAT);
+  gl.uniform1f(U.u_near, nearRoom());
+  gl.uniform1i(U.u_steps, STEPS[quality]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  // xyzw readout: w is the real fourth coordinate, continuous through the throat
+  document.getElementById('hud').textContent =
+    'x ' + cam.p[0].toFixed(2) +
+    '   y ' + cam.p[1].toFixed(2) +
+    '   z ' + cam.p[2].toFixed(2) +
+    '   w ' + cam.w.toFixed(2);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
