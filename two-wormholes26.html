@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Two connected wormhole mouths</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden}
+body{background:#05070c;color:#e8edf6;font:14px system-ui,sans-serif}
+#stage{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;overflow:hidden;display:grid;place-items:center}
+canvas#view{display:block;width:min(100vw,177.7778dvh);height:auto;max-height:100dvh;aspect-ratio:16/9;background:#000;cursor:grab;touch-action:none}
+ #hud{position:fixed;left:14px;top:14px;z-index:99;pointer-events:none;
+      color:#fff;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:4px;
+      border:1px solid #2a394e;text-shadow:0 1px 4px #000;
+      font:14px ui-monospace,monospace;line-height:1.5;white-space:pre}
+/* top is offset to clear the browser bookmarks bar, which overlays the
+   viewport and was hiding the first slider. */
+#panel{position:absolute;right:12px;top:46px;width:min(240px,calc(100vw - 24px));max-height:calc(100dvh - 104px);overflow-y:auto;overflow-x:hidden;background:rgba(12,17,26,.92);border:1px solid #263347;border-radius:8px;padding:13px;backdrop-filter:blur(6px)}
+#panel.min{display:none}
+h1{font-size:13px;margin:0 0 8px;color:#a8e7ff}
+label{display:block;margin:10px 0 4px;color:#9fb0c8;font-size:11px}
+input[type=range]{width:100%}
+input[type=file]{width:100%;margin-top:4px;color:#9fb0c8;font-size:10px}
+#modelStatus{margin-top:5px;color:#91a1b7;font-size:10px;line-height:1.4;white-space:normal}
+#keys{margin-top:10px;border-top:1px solid #2a394e;padding-top:9px;color:#7f8ea3;font-size:11px;line-height:1.55}
+kbd{background:#26364b;padding:1px 4px;border-radius:3px;color:#fff}
+#toggle{position:absolute;right:12px;bottom:12px;background:rgba(12,17,26,.8);border:1px solid #263347;color:#cfe;border-radius:5px;padding:5px 9px;cursor:pointer;font:11px system-ui}
+#infoBtn{position:fixed;left:12px;bottom:12px;z-index:101;background:rgba(12,17,26,.92);border:1px solid #38516e;color:#d9efff;border-radius:5px;padding:6px 11px;cursor:pointer;font:12px system-ui}
+#infoBox{position:fixed;left:12px;bottom:52px;z-index:100;width:min(620px,calc(100vw - 24px));max-height:68vh;overflow:auto;background:rgba(9,14,23,.97);border:1px solid #38516e;border-radius:8px;padding:16px 18px;box-shadow:0 8px 32px #000b;line-height:1.5}
+#infoBox[hidden]{display:none}
+#infoBox h2{font-size:16px;margin:0 34px 10px 0;color:#a8e7ff}
+#infoBox h3{font-size:12px;margin:13px 0 4px;color:#b9d2ef}
+#infoBox p{font-size:12px;margin:5px 0;color:#d1dae7}
+#infoBox code{font:12px ui-monospace,monospace;color:#d6e8ff}
+#infoClose{position:absolute;top:9px;right:10px;background:#1a2636;border:1px solid #38516e;color:#e8edf6;border-radius:4px;padding:3px 8px;cursor:pointer}
+/* Collapsible slider section inside the panel. */
+#panel details{border-top:1px solid #2a394e;margin-top:9px;padding-top:7px}
+#panel details:first-of-type{border-top:0;margin-top:0;padding-top:0}
+#panel summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;
+  color:#a8e7ff;font-size:12px;user-select:none}
+#panel summary::-webkit-details-marker{display:none}
+#panel summary::before{content:"\25B8";font-size:10px;color:#6f8299;transition:transform .15s}
+#panel details[open]>summary::before{transform:rotate(90deg)}
+#panel summary:hover{color:#d9f2ff}
+#panel summary .chev{margin-left:auto;color:#6f8299;font-size:9px}
+#panel details[open]>summary .chev::after{content:"collapse"}
+#panel details:not([open])>summary .chev::after{content:"expand"}
+#panel details[open]>summary{margin-bottom:2px}
+</style></head>
+<body>
+<div id="stage">
+<canvas id="view" width="960" height="540"></canvas>
+<div id="hud"></div>
+<div id="panel">
+  <h1 id="ptitle">Two connected wormhole mouths</h1>
+ <details id="sliders">
+  <summary>Controls <span class="chev"></span></summary>
+  <label>Throat size (radius) &nbsp;<b id="av">1.00 m</b></label>
+  <input id="n_sl" type="range" min=".3" max="3" step=".05" value="1">
+  <label>Field of view &nbsp;<b id="fv">70</b>&deg;</label>
+  <input id="fov_sl" type="range" min="35" max="110" step="5" value="70">
+  <label>Wall grid line thickness &nbsp;<b id="gv">0.016</b></label>
+  <input id="g_sl" type="range" min="0.005" max="0.040" step="0.001" value="0.016">
+  <div style="margin-top:11px;border-top:1px solid #2a394e;padding-top:9px">
+    <label for="stlFile" style="margin-top:0">STL model</label>
+    <input id="stlFile" type="file" accept=".stl,model/stl,application/sla">
+    <div id="modelStatus" role="status">Choose an STL file to add it to the ray-traced scene.</div>
+    <label for="modelPosition">STL position &nbsp;<b id="modelPositionValue">z &minus;6.84 m &middot; l &minus;3.00 m (red chart)</b></label>
+    <input id="modelPosition" type="range" min="-5" max="5" step="0.05" value="-3">
+  </div>
+ </details>
+</div>
+<button id="toggle" type="button" aria-controls="panel" aria-expanded="true">panel</button>
+<button id="infoBtn" type="button" aria-expanded="false" aria-controls="infoBox">INFO</button>
+<section id="infoBox" role="dialog" aria-labelledby="infoTitle" hidden>
+  <button id="infoClose" type="button" aria-label="Close information">Close</button>
+  <h2 id="infoTitle">How the connected Ellis wormhole works</h2>
+  <h3>Geometry and coordinates</h3>
+  <p>The room display is 10 m &times; 10 m &times; 30 m, spanning z = &minus;15 m to +15 m, with red, green, and blue 10 m sections. It is an ordinary axis-aligned box: the room walls are flat planes at |x| = 5 m, |y| = 5 m, and |z| = 15 m, and nothing is cut out of them.</p>
+  <p>The geometry is one symmetric, massless Ellis bridge (m = 0), with spatial metric <code>dl² + (l² + a²)dΩ²</code> and signed proper-radial coordinate <code>l</code>. Its two asymptotically flat charts are drawn inside this room, centred on the mouths at z = &minus;10 m and z = +10 m.</p>
+  <p><b>Massless</b> means the wormhole's gravitational mass, measured far away in either
+  region, is zero. It does not mean the throat or curvature is absent: the throat radius
+  <code>a</code> is nonzero, and the geometry is supported by an exotic scalar field. In this
+  model there is no mass-related gravitational redshift; the time component of the metric
+  is constant.</p>
+  <h3>What is actually at each mouth</h3>
+  <p>Each wormhole is a surface of revolution, not a sphere or a bubble. Its areal radius is
+  <code>r = √(l² + a²)</code>, which reaches its minimum value <code>a</code> at the throat,
+  so at z = &minus;10 m and z = +10 m the surface tapers to a <b>ring</b> of radius
+  <code>a</code> (1.00 m by default).</p>
+  <p>Inside that ring there is <b>no wormhole surface</b>, but there is also <b>no void</b>:
+  that region is ordinary open room space. The mouths sit inside the room box, 5 m clear of
+  each end wall, so no wall ever has a hole in it. The ring is a genuine edge of the
+  geometry, not an absence of space.</p>
+  <p>The tracer enforces this with <code>r0 = max(&rho;, a)</code>: any room point closer than
+  <code>a</code> to a mouth centre is clamped onto the throat and given <code>l = 0</code>.
+  Correspondingly, the radial metric component <code>g<sub>&rho;&rho;</sub> = &rho;²/(&rho;² &minus; a²)</code>
+  diverges as <code>&rho; &rarr; a</code>, which is the throat's defining feature.</p>
+  <h3>Camera movement</h3>
+  <p>W/S move forward and back, A/D or the left/right arrows strafe, and the up/down arrows,
+  <kbd>Space</kbd>, and <kbd>Ctrl</kbd> move up and down. Holding <kbd>Shift</kbd> raises the
+  speed from 4.5 to 14 m/s. <kbd>C</kbd> teleports the camera to just outside the opposite
+  mouth, and <kbd>R</kbd> resets the view.</p>
+  <p>When the camera comes within <code>a</code> of either mouth centre it is mapped to the
+  paired mouth. This is a simple geometric remap, not a geodesic: the new distance from the
+  far mouth centre is <code>2a &minus; r</code>, the z coordinate is reflected to the other
+  mouth, and the view direction is mirrored about the mouth axis, so you emerge facing away
+  from that mouth. The camera does not travel along the wormhole surface the way light rays
+  do.</p>
+  <h3>How the image is rendered</h3>
+  <p>A separate light ray is traced for every screen pixel through the Ellis spatial metric,
+  starting at the camera's location. The fourth-order Runge–Kutta integrator follows the
+  geodesic in the Ellis chart of whichever mouth is nearer (z &lt; 0 uses the red mouth,
+  z &ge; 0 the blue one), advancing
+  <code>l' = &mu;</code>, <code>&mu;' = +b²l/(l² + a²)²</code>, <code>&phi;' = b/(l² + a²)</code>
+  with step <code>ds = min(0.18, 0.05&middot;r)</code>. When the ray's position crosses the
+  midplane between the mouths the chart is re-seeded from the ray's current position and
+  direction, so both mouths lens light identically. Rays whose <code>l</code> changes sign have
+  genuinely passed through a throat: the chart origin switches to the other mouth and tracing
+  continues there. Rays are clipped where they meet a room wall. Wall color is selected from
+  displayed z: red for z &lt; &minus;5 m, green for &minus;5 m &lt; z &lt; +5 m, and blue for z &gt; +5 m.</p>
+  <p>This is the exact single Ellis metric on its two charts. The colored 30 m room is a
+  visual coordinate layout for those charts, not a separate numerical solution of the
+  Einstein equations for a wormhole embedded in one ordinary room.</p>
+  <p>An STL is rendered as a surface in this ray-traced scene. Its position slider moves it
+  along the signed radial coordinate <code>l</code>, and its world z is
+  <code>&minus;10 + l</code> on the red chart or <code>+10 + l</code> on the blue one. Note
+  that the object is deliberately <b>hidden while |l| &lt; 0.7 m</b>, so it disappears before
+  reaching the throat and reappears on the far side; the passage itself is not drawn. It is
+  also scaled to a fixed 0.5 and keeps its local orientation fixed, since the turn angle is
+  hard-coded to zero. This is not a simulation of a freely moving rigid body or of tidal
+  forces on the object.</p>
+  <h3>Controls and scope</h3>
+  <p>Each ray is integrated for up to <code>MAX_STEPS</code> = 500 steps, which is enough for
+  every ray to reach a room wall. <b>Throat size</b> sets the aperture radius
+  <code>a</code> (0.3 m to 3 m), so it changes where the surface pinches. <b>Field of view</b>
+  changes the camera lens. <b>Wall grid line thickness</b> changes the drawn grid width; it is a
+  visual setting. The wall shading and grid are illustrative. This is a static ray-path
+  visualization, not a complete simulation of materials, reflected light, or time-dependent
+  gravitational physics.</p>
+  <p>Known limitation: the shader's <code>u_chartSide</code> uniform is declared and uploaded
+  from JavaScript but is never read by the fragment shader, so the per-chart state it was
+  meant to carry has no effect on the image. Chart selection in the current renderer is
+  driven entirely by the sign of the ray's <code>z</code> coordinate.</p>
+</section>
+</div>
+<script>
+"use strict";
+// Any failure must be visible. A silent throw leaves a black canvas, which is
+// indistinguishable from "the render is just very dark".
+window.addEventListener('error', e => showFatal(e.message + ' (' + e.lineno + ':' + e.colno + ')'));
+function showFatal(msg){
+  const c = document.getElementById('view');
+  if(c){ c.style.background = '#2a0d0d'; }
+  const p = document.getElementById('panel');
+  if(p){
+    p.classList.remove('min');
+    p.innerHTML = '<h1 style="color:#ff9a9a">Error</h1><pre style="white-space:pre-wrap;' +
+                  'font:11px ui-monospace,monospace;color:#ffd7d7;margin:0">' +
+                  String(msg).replace(/[<&]/g, c2 => c2 === '<' ? '&lt;' : '&amp;') + '</pre>';
+  }
+}
+// ---------------------------------------------------------------- shader
+const VS = `
+attribute vec2 a_pos;
+void main(){ gl_Position = vec4(a_pos,0.0,1.0); }`;
+
+const FS = `
+precision highp float;
+uniform vec2 u_res;
+uniform vec3 u_cam;
+uniform float u_yaw;
+uniform float u_pitch;
+uniform float u_fov;
+uniform float u_n;
+uniform float u_chartSide;
+uniform float u_grid;
+uniform float u_objEnabled;
+uniform float u_objL;
+uniform float u_objScale;
+uniform float u_objTurn;
+uniform float u_objTriCount;
+uniform float u_objNodeCount;
+uniform vec2 u_objTexSize;
+uniform vec2 u_objNodeTexSize;
+uniform vec3 u_objMin;
+uniform vec3 u_objMax;
+uniform sampler2D u_objMesh;
+uniform sampler2D u_objNodes;
+
+const float PI=3.141592653589793;
+ const int MAX_STEPS=500;
+const int MAX_BVH_VISITS=512;
+const int MAX_LEAF_TRIANGLES=8;
+const float ROOM=5.0;
+const float ROOM_LENGTH=15.0;
+
+// m=0 Ellis wormhole: dl^2 + (l^2+a^2)dOmega^2.
+float a_of(float n){ return max(n,1e-4); }
+vec3 rotateAxis(vec3 v, vec3 axis, float angle){
+  float c=cos(angle), s=sin(angle);
+  return v*c+cross(axis,v)*s+axis*dot(axis,v)*(1.0-c);
+}
+
+vec3 roomColor(float z){
+  if(z < -5.0) return vec3(0.62,0.09,0.09);
+  if(z < 5.0) return vec3(0.10,0.47,0.20);
+  return vec3(0.10,0.22,0.66);
+}
+
+float roomExit(vec3 ro, vec3 rd, out vec3 nrm){
+  float tBest=1e9;
+  nrm=vec3(0.0,0.0,1.0);
+  if(rd.x!=0.0){
+    float t=(rd.x>0.0?(ROOM-ro.x):(-ROOM-ro.x))/rd.x;
+    if(t>0.0&&t<tBest){tBest=t;nrm=vec3(1.0,0.0,0.0)*sign(rd.x);}
+  }
+  if(rd.y!=0.0){
+    float t=(rd.y>0.0?(ROOM-ro.y):(-ROOM-ro.y))/rd.y;
+    if(t>0.0&&t<tBest){tBest=t;nrm=vec3(0.0,1.0,0.0)*sign(rd.y);}
+  }
+  if(rd.z!=0.0){
+    float t=(rd.z>0.0?(ROOM_LENGTH-ro.z):(-ROOM_LENGTH-ro.z))/rd.z;
+    if(t>0.0&&t<tBest){tBest=t;nrm=vec3(0.0,0.0,1.0)*sign(rd.z);}
+  }
+  return tBest;
+}
+
+vec3 wallColor(vec3 p, vec3 nrm, float t, float idx){
+  vec3 base=roomColor(idx);
+  vec3 an=abs(nrm);
+  vec2 q;
+  if(an.x>0.5) q=p.yz;
+  else if(an.y>0.5) q=p.xz;
+  else q=p.xy;
+  float lw=u_grid*(1.0+0.22*t);
+  vec2 d=abs(fract(q+0.5)-0.5);
+  float line=1.0-smoothstep(0.0,lw,min(d.x,d.y));
+  vec3 Ldir=normalize(vec3(0.4,0.8,0.3));
+  float lam=0.55+0.45*max(0.0,dot(nrm,Ldir));
+  vec3 c=base*lam;
+  c=mix(c,vec3(0.02),line*0.95);
+  float sectionMark=1.0-smoothstep(u_grid*2.0,u_grid*5.0,min(abs(p.z+5.0),abs(p.z-5.0)));
+  c=mix(c,vec3(0.72,0.78,0.85),sectionMark*0.72);
+  c*=1.0-0.16*smoothstep(2.0,9.0,t);
+  return c;
+}
+
+vec3 objectLocal(vec3 p,float l,float a){
+  vec3 direction=normalize(p);
+  float angle=acos(clamp(direction.z,-1.0,1.0));
+  float sine=max(sin(angle),1e-6);
+  float tangentScale=sqrt(u_objL*u_objL+a*a)*angle/sine;
+  vec3 q=vec3(direction.xy*tangentScale,l-u_objL);
+  float c=cos(u_objTurn),s=sin(u_objTurn);
+  return vec3(c*q.x-s*q.z,q.y,s*q.x+c*q.z)/u_objScale;
+}
+vec3 objectVertex(float index){
+  float x=mod(index,u_objTexSize.x), y=floor(index/u_objTexSize.x);
+  return texture2D(u_objMesh,(vec2(x,y)+0.5)/u_objTexSize).xyz;
+}
+vec4 objectNodeTexel(float index){
+  float x=mod(index,u_objNodeTexSize.x), y=floor(index/u_objNodeTexSize.x);
+  return texture2D(u_objNodes,(vec2(x,y)+0.5)/u_objNodeTexSize);
+}
+bool objectBoxHit(vec3 a,vec3 b,vec3 boxMin,vec3 boxMax,out float nearT,out float farT){
+  vec3 d=b-a;
+  vec3 sd=vec3(abs(d.x)<1e-8?(d.x<0.0?-1e-8:1e-8):d.x,
+               abs(d.y)<1e-8?(d.y<0.0?-1e-8:1e-8):d.y,
+               abs(d.z)<1e-8?(d.z<0.0?-1e-8:1e-8):d.z);
+  vec3 inv=1.0/sd;
+  vec3 t0=(boxMin-a)*inv, t1=(boxMax-a)*inv;
+  vec3 lo=min(t0,t1), hi=max(t0,t1);
+  nearT=max(max(max(lo.x,lo.y),lo.z),0.0);
+  farT=min(min(min(hi.x,hi.y),hi.z),1.0);
+  return farT>=nearT;
+}
+bool objectTriangleHit(vec3 a,vec3 b,vec3 v0,vec3 v1,vec3 v2,
+                       out float t,out vec3 normal){
+  vec3 d=b-a,e1=v1-v0,e2=v2-v0;
+  vec3 p=cross(d,e2);
+  float det=dot(e1,p);
+  if(abs(det)<1e-8) return false;
+  float invDet=1.0/det;
+  vec3 q0=a-v0;
+  float u=dot(q0,p)*invDet;
+  if(u<0.0||u>1.0) return false;
+  vec3 q=cross(q0,e1);
+  float v=dot(d,q)*invDet;
+  if(v<0.0||u+v>1.0) return false;
+  t=dot(e2,q)*invDet;
+  if(t<0.0||t>1.0) return false;
+  normal=normalize(cross(e1,e2));
+  return true;
+}
+bool objectSegmentHit(vec3 worldA,vec3 worldB,float segmentL0,float segmentL1,float a,
+                      out float bestT,out vec3 bestNormal){
+  if(u_objEnabled<0.5||u_objTriCount<0.5) return false;
+  float extent=u_objScale*max(max(abs(u_objMin.x),abs(u_objMax.x)),
+                max(max(abs(u_objMin.y),abs(u_objMax.y)),max(abs(u_objMin.z),abs(u_objMax.z))));
+  if(u_objL<min(segmentL0,segmentL1)-extent||u_objL>max(segmentL0,segmentL1)+extent)
+    return false;
+  vec3 p0=objectLocal(worldA,segmentL0,a),p1=objectLocal(worldB,segmentL1,a);
+  float nearT,farT;
+  if(!objectBoxHit(p0,p1,u_objMin,u_objMax,nearT,farT)) return false;
+  bool found=false; bestT=2.0; bestNormal=vec3(0.0,0.0,1.0);
+  int node=0;
+  for(int visit=0;visit<MAX_BVH_VISITS;visit++){
+    if(float(node)>=u_objNodeCount) break;
+    float base=float(node)*3.0;
+    vec4 n0=objectNodeTexel(base), n1=objectNodeTexel(base+1.0), meta=objectNodeTexel(base+2.0);
+    float nodeNear,nodeFar;
+    if(!objectBoxHit(p0,p1,n0.xyz,n1.xyz,nodeNear,nodeFar)||nodeNear>bestT){
+      node=int(meta.w+0.5);
+      continue;
+    }
+    if(meta.z>0.5){
+      for(int j=0;j<MAX_LEAF_TRIANGLES;j++){
+        if(float(j)>=meta.y) break;
+        float tri=meta.x+float(j);
+        vec3 v0=objectVertex(tri*3.0);
+        vec3 v1=objectVertex(tri*3.0+1.0);
+        vec3 v2=objectVertex(tri*3.0+2.0);
+        float t; vec3 normal;
+        if(objectTriangleHit(p0,p1,v0,v1,v2,t,normal)&&t>=nodeNear&&t<=nodeFar&&t<bestT){
+          found=true; bestT=t; bestNormal=normal;
+        }
+      }
+      node=int(meta.w+0.5);
+    }else{
+      node=int(n0.w+0.5);
+    }
+  }
+  return found;
+}
+bool objectWorldSegmentHit(vec3 worldA,vec3 worldB,float objectZ,
+                           out float bestT,out vec3 bestNormal){
+  if(u_objEnabled<0.5||u_objTriCount<0.5||abs(u_objL)<0.7) return false;
+  float c=cos(u_objTurn),s=sin(u_objTurn);
+  vec3 a=worldA-vec3(0.0,0.0,objectZ), b=worldB-vec3(0.0,0.0,objectZ);
+  a=vec3(c*a.x+s*a.z,a.y,-s*a.x+c*a.z)/u_objScale;
+  b=vec3(c*b.x+s*b.z,b.y,-s*b.x+c*b.z)/u_objScale;
+  float nearT,farT;
+  if(!objectBoxHit(a,b,u_objMin,u_objMax,nearT,farT)) return false;
+  bool found=false; bestT=2.0; bestNormal=vec3(0.0,0.0,1.0);
+  int node=0;
+  for(int visit=0;visit<MAX_BVH_VISITS;visit++){
+    if(float(node)>=u_objNodeCount) break;
+    float base=float(node)*3.0;
+    vec4 n0=objectNodeTexel(base), n1=objectNodeTexel(base+1.0), meta=objectNodeTexel(base+2.0);
+    float nodeNear,nodeFar;
+    if(!objectBoxHit(a,b,n0.xyz,n1.xyz,nodeNear,nodeFar)||nodeNear>bestT){
+      node=int(meta.w+0.5); continue;
+    }
+    if(meta.z>0.5){
+      for(int j=0;j<MAX_LEAF_TRIANGLES;j++){
+        if(float(j)>=meta.y) break;
+        float tri=meta.x+float(j);
+        vec3 v0=objectVertex(tri*3.0),v1=objectVertex(tri*3.0+1.0),v2=objectVertex(tri*3.0+2.0);
+        float t; vec3 normal;
+        if(objectTriangleHit(a,b,v0,v1,v2,t,normal)&&t>=nodeNear&&t<=nodeFar&&t<bestT){
+          found=true; bestT=t; bestNormal=normal;
+        }
+      }
+      node=int(meta.w+0.5);
+    }else node=int(n0.w+0.5);
+  }
+  return found;
+}
+vec3 objectColor(vec3 localNormal){
+  float c=cos(u_objTurn),s=sin(u_objTurn);
+  vec3 normal=normalize(vec3(c*localNormal.x+s*localNormal.z,
+                             localNormal.y,-s*localNormal.x+c*localNormal.z));
+  vec3 lightA=normalize(vec3(-0.35,0.65,0.7));
+  vec3 lightB=normalize(vec3(-0.35,0.65,-0.7));
+  float diffuse=max(0.0,dot(normal,lightA))+max(0.0,dot(normal,lightB));
+  float light=0.32+0.34*diffuse;
+  vec3 tint=u_objL<0.0?vec3(1.0,0.55,0.46):vec3(0.48,0.67,1.0);
+  return tint*light;
+}
+
+// State is (l, dl/ds, phi). For unit-energy null rays, b is conserved and
+// d2l/ds2=b^2*l/(l^2+a^2)^2; dphi/ds=b/(l^2+a^2).
+vec3 ellisDerivative(vec3 y,float b,float a){
+  float r2=y.x*y.x+a*a;
+  return vec3(y.y,b*b*y.x/(r2*r2),b/r2);
+}
+vec3 ellisRK4(vec3 y,float ds,float b,float a){
+  vec3 k1=ellisDerivative(y,b,a);
+  vec3 k2=ellisDerivative(y+0.5*ds*k1,b,a);
+  vec3 k3=ellisDerivative(y+0.5*ds*k2,b,a);
+  vec3 k4=ellisDerivative(y+ds*k3,b,a);
+  return y+(ds/6.0)*(k1+2.0*k2+2.0*k3+k4);
+}
+
+// Trace each pixel's light ray through the Ellis metric. The sign of l selects
+// the room copy, so the surface actually reached supplies the pixel radiance.
+vec3 traceEllisRay(vec3 P0,vec3 dir,float a){
+  // One tracer, symmetric in both mouths. At every step the ray is expressed in
+  // the Ellis chart of whichever mouth is nearer (z<0 -> red mouth at -10,
+  // z>=0 -> blue mouth at +10). When the nearer mouth changes (the z=0 midplane)
+  // the state is re-initialised from the ray's current world position and
+  // direction, so the path stays continuous and both mouths lens identically.
+  vec3 P=P0, d=dir;
+  float chartZ=P.z<0.0?-10.0:10.0;
+  bool needInit=true;
+  float b=0.0;
+  vec3 n0=vec3(0.0,0.0,1.0), axis=vec3(0.0,1.0,0.0), y=vec3(0.0);
+  float path=0.0;
+  for(int i=0;i<MAX_STEPS;i++){
+    vec3 oldN=n0;
+    vec3 oldP=P;
+    if(!needInit){
+      oldN=rotateAxis(n0,axis,y.z);
+      oldP=oldN*sqrt(y.x*y.x+a*a)+vec3(0.0,0.0,chartZ);
+    }
+    float wantZ=oldP.z<0.0?-10.0:10.0;
+    if(needInit||wantZ!=chartZ){
+      if(!needInit){
+        // orthonormal-frame direction: radial part sign(l)*dl/ds, tangential b/r
+        float rr=sqrt(y.x*y.x+a*a);
+        float sg=y.x<0.0?-1.0:1.0;
+        d=normalize(sg*y.y*oldN+(b/rr)*cross(axis,oldN));
+      }
+      chartZ=wantZ;
+      vec3 loc=oldP-vec3(0.0,0.0,chartZ);
+      float ll=length(loc);
+      float r0=max(ll,a);
+      n0=ll>1e-5?loc/ll:vec3(0.0,0.0,1.0);
+      float mu=clamp(dot(d,n0),-1.0,1.0);
+      vec3 tangent=d-mu*n0;
+      b=r0*length(tangent);
+      float sideSign=chartZ<0.0?-1.0:1.0;
+      y=vec3(sideSign*sqrt(max(r0*r0-a*a,0.0)),sideSign*mu,0.0);
+      if(b>1e-6) axis=normalize(cross(n0,tangent));
+      else{
+        vec3 fallback=abs(n0.y)<0.9?vec3(0.0,1.0,0.0):vec3(1.0,0.0,0.0);
+        axis=normalize(cross(n0,fallback));
+      }
+      needInit=false;
+      oldN=n0;
+      oldP=n0*r0+vec3(0.0,0.0,chartZ);
+    }
+    float oldL=y.x;
+    float oldR=sqrt(oldL*oldL+a*a);
+    vec3 oldLocal=oldN*oldR;
+    float ds=min(0.18,0.05*oldR);
+    float objectExtent=u_objScale*max(max(abs(u_objMin.x),abs(u_objMax.x)),
+                        max(max(abs(u_objMin.y),abs(u_objMax.y)),max(abs(u_objMin.z),abs(u_objMax.z))));
+    float objectFocus=u_objEnabled>0.5?1.0-smoothstep(0.0,max(0.4,objectExtent+0.2),abs(oldL-u_objL)):0.0;
+    ds=mix(ds,min(ds,0.03),objectFocus);
+    vec3 yn=ellisRK4(y,ds,b,a);
+    float newR=sqrt(yn.x*yn.x+a*a);
+    vec3 newN=rotateAxis(n0,axis,yn.z);
+    vec3 newLocal=newN*newR;
+    vec3 newP=newLocal+vec3(0.0,0.0,chartZ);
+    vec3 segment=newP-oldP;
+    float segmentLength=length(segment);
+    if((oldL<0.0&&yn.x>=0.0)||(oldL>0.0&&yn.x<=0.0)){
+      chartZ=chartZ<0.0?10.0:-10.0;   // through the throat: other mouth's room
+      y=yn;
+      continue;
+    }
+    if(segmentLength>1e-6){
+      vec3 wallNormal;
+      vec3 segmentDir=segment/segmentLength;
+      float wallT=roomExit(oldP,segmentDir,wallNormal);
+      float wallFraction=(wallT>1e-5&&wallT<=segmentLength)?wallT/segmentLength:2.0;
+      float objectT; vec3 objectNormal;
+      bool hitObject=objectSegmentHit(oldLocal,newLocal,oldL,yn.x,a,objectT,objectNormal);
+      if(hitObject&&objectT<wallFraction) return objectColor(objectNormal);
+      if(wallFraction<=1.0){
+        float hitT=clamp(wallFraction,0.0,1.0);
+        vec3 hit=oldP+segmentDir*wallT;
+        return wallColor(hit,wallNormal,path+ds*hitT,hit.z);
+      }
+    }
+    path+=ds;
+    y=yn;
+  }
+  return vec3(0.008,0.01,0.016);
+}
+
+vec3 traceRoomRay(vec3 origin,vec3 dir){
+  vec3 normal;
+  float t=roomExit(origin,dir,normal);
+  vec3 end=origin+dir*t;
+  float objectZ=u_objL<0.0?-10.0+u_objL:10.0+u_objL;
+  float objectT; vec3 objectNormal;
+  bool sameExterior=(u_objL<0.0&&origin.z<-5.0)||(u_objL>0.0&&origin.z>5.0);
+  if(sameExterior&&objectWorldSegmentHit(origin,end,objectZ,objectT,objectNormal)&&objectT<=1.0)
+    return objectColor(objectNormal);
+  return wallColor(end,normal,t,end.z);
+}
+
+void main(){
+  vec2 frag=gl_FragCoord.xy;
+  vec2 uv=(2.0*frag-u_res)/u_res.y;
+  float a=a_of(u_n);
+  float cp=cos(u_pitch),sp=sin(u_pitch);
+  vec3 fwd=vec3(sin(u_yaw)*cp,sp,-cos(u_yaw)*cp);
+  vec3 right=vec3(-fwd.z,0.0,fwd.x);
+  float rl=length(right);
+  right=rl<1e-4?vec3(1.0,0.0,0.0):right/rl;
+  vec3 upv=cross(right,fwd);
+  float k=1.0/tan(u_fov*0.5);
+  vec3 dir=normalize(fwd+right*(uv.x*k)+upv*(uv.y*k));
+  vec3 col=traceEllisRay(u_cam,dir,a);
+  float vig=1.0-0.18*dot(uv,uv)*0.5;
+  col*=vig;
+  col+=(fract(sin(dot(frag,vec2(12.9898,78.233)))*43758.5453)-0.5)/255.0;
+  gl_FragColor=vec4(pow(max(col,0.0),vec3(0.4545)),1.0);
+}`;
+
+// ---------------------------------------------------------------- setup
+const canvas = document.getElementById('view');
+const gl = canvas.getContext('webgl', {antialias:false, preserveDrawingBuffer:true});
+if(!gl){
+  showFatal('WebGL unavailable. Try a different browser or enable hardware acceleration.');
+  throw new Error('no webgl');
+}
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+    const log = gl.getShaderInfoLog(s);
+    showFatal('Shader compile failed:\n' + log);
+    console.error(log, src.split('\n').map((l,i)=>(i+1)+': '+l).join('\n'));
+    throw new Error('shader: '+log);
+  }
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){ showFatal('Link failed:\n' + gl.getProgramInfoLog(prog)); throw new Error('link'); }
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const U = {};
+for(const u of ['u_res','u_cam','u_yaw','u_pitch','u_fov','u_n','u_chartSide','u_grid',
+                'u_objEnabled','u_objL','u_objScale','u_objTurn','u_objTriCount','u_objNodeCount',
+                'u_objTexSize','u_objNodeTexSize','u_objMin','u_objMax','u_objMesh','u_objNodes'])
+  U[u] = gl.getUniformLocation(prog, u);
+const objTexture = gl.createTexture();
+const objNodeTexture = gl.createTexture();
+const objFloatTexture = gl.getExtension('OES_texture_float');
+let objTriangleCount=0, objNodeCount=0;
+let objTextureWidth=1, objTextureHeight=1, objNodeTextureWidth=1, objNodeTextureHeight=1;
+let objBoundsMin=[0,0,0], objBoundsMax=[0,0,0];
+function initializeDataTexture(texture){
+  gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  if(objFloatTexture) gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.FLOAT,new Float32Array(4));
+  else gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4));
+}
+initializeDataTexture(objTexture);
+initializeDataTexture(objNodeTexture);
+
+const $ = id => document.getElementById(id);
+const modelStatus = $('modelStatus');
+let modelL = -3;
+
+function parseStl(buffer){
+  const bytes=new Uint8Array(buffer), view=new DataView(buffer), vertices=[];
+  let binary=false, count=0;
+  if(buffer.byteLength>=84){
+    count=view.getUint32(80,true);
+    binary=count>0 && 84+count*50===buffer.byteLength;
+  }
+  if(binary){
+    for(let i=0;i<count;i++){
+      const start=84+i*50+12;
+      for(let v=0;v<3;v++){
+        const o=start+v*12;
+        vertices.push(view.getFloat32(o,true),view.getFloat32(o+4,true),view.getFloat32(o+8,true));
+      }
+    }
+  }else{
+    const text=new TextDecoder().decode(bytes);
+    const re=/\bvertex\s+([-+\d.eE]+)\s+([-+\d.eE]+)\s+([-+\d.eE]+)/gi;
+    let m;
+    while((m=re.exec(text))) vertices.push(+m[1],+m[2],+m[3]);
+  }
+  if(vertices.length<9 || vertices.length%9!==0 || vertices.some(v=>!Number.isFinite(v)))
+    throw new Error('This does not look like a valid binary or ASCII STL file.');
+  const lo=[Infinity,Infinity,Infinity], hi=[-Infinity,-Infinity,-Infinity];
+  for(let i=0;i<vertices.length;i+=3) for(let a=0;a<3;a++){
+    lo[a]=Math.min(lo[a],vertices[i+a]); hi[a]=Math.max(hi[a],vertices[i+a]);
+  }
+  const center=lo.map((v,a)=>(v+hi[a])*0.5);
+  const maxDim=Math.max(...hi.map((v,a)=>v-lo[a]));
+  if(!(maxDim>0)) throw new Error('The STL model has no measurable size.');
+  const scale=1.35/maxDim, packed=[];
+  for(let i=0;i<vertices.length;i+=9){
+    const p=[];
+    for(let v=0;v<3;v++) p.push([0,1,2].map(a=>(vertices[i+v*3+a]-center[a])*scale));
+    const e1=p[1].map((x,a)=>x-p[0][a]), e2=p[2].map((x,a)=>x-p[0][a]);
+    const n=norm3([e1[1]*e2[2]-e1[2]*e2[1],e1[2]*e2[0]-e1[0]*e2[2],e1[0]*e2[1]-e1[1]*e2[0]]);
+    for(let v=0;v<3;v++) packed.push(...p[v],...n);
+  }
+  const normalizedMin=lo.map((v,a)=>(v-center[a])*scale);
+  const normalizedMax=hi.map((v,a)=>(v-center[a])*scale);
+  return {vertices:new Float32Array(packed),min:normalizedMin,max:normalizedMax,
+          triangles:packed.length/18};
+}
+
+function buildStlBvh(parsed,width){
+  const count=parsed.triangles, centers=new Float32Array(count*3);
+  const triMin=new Float32Array(count*3), triMax=new Float32Array(count*3);
+  for(let t=0;t<count;t++){
+    const base=t*18;
+    for(let a=0;a<3;a++){
+      let lo=Infinity,hi=-Infinity,sum=0;
+      for(let v=0;v<3;v++){
+        const value=parsed.vertices[base+v*6+a];
+        lo=Math.min(lo,value); hi=Math.max(hi,value); sum+=value;
+      }
+      triMin[t*3+a]=lo; triMax[t*3+a]=hi; centers[t*3+a]=sum/3;
+    }
+  }
+  const nodes=[], ordered=[];
+  function build(ids){
+    const index=nodes.length;
+    nodes.push(null);
+    const lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];
+    const clo=[Infinity,Infinity,Infinity],chi=[-Infinity,-Infinity,-Infinity];
+    for(const t of ids) for(let a=0;a<3;a++){
+      lo[a]=Math.min(lo[a],triMin[t*3+a]); hi[a]=Math.max(hi[a],triMax[t*3+a]);
+      clo[a]=Math.min(clo[a],centers[t*3+a]); chi[a]=Math.max(chi[a],centers[t*3+a]);
+    }
+    if(ids.length<=8){
+      const start=ordered.length;
+      ordered.push(...ids);
+      nodes[index]={min:lo,max:hi,left:-1,right:-1,start,count:ids.length,leaf:true,escape:nodes.length};
+      return index;
+    }
+    let axis=0;
+    if(chi[1]-clo[1]>chi[axis]-clo[axis]) axis=1;
+    if(chi[2]-clo[2]>chi[axis]-clo[axis]) axis=2;
+    ids.sort((a,b)=>centers[a*3+axis]-centers[b*3+axis]);
+    const mid=ids.length>>1;
+    const left=build(ids.slice(0,mid));
+    const right=build(ids.slice(mid));
+    nodes[index]={min:lo,max:hi,left,right,start:0,count:0,leaf:false,escape:nodes.length};
+    return index;
+  }
+  build(Array.from({length:count},(_,i)=>i));
+  const triangleHeight=Math.ceil(count*3/width), nodeHeight=Math.ceil(nodes.length*3/width);
+  const triangleData=new Float32Array(width*triangleHeight*4);
+  const nodeData=new Float32Array(width*nodeHeight*4);
+  let vertex=0;
+  for(const t of ordered){
+    const base=t*18;
+    for(let v=0;v<3;v++){
+      const dst=vertex++*4,src=base+v*6;
+      triangleData[dst]=parsed.vertices[src];
+      triangleData[dst+1]=parsed.vertices[src+1];
+      triangleData[dst+2]=parsed.vertices[src+2];
+      triangleData[dst+3]=1;
+    }
+  }
+  for(let i=0;i<nodes.length;i++){
+    const node=nodes[i],offset=i*12;
+    nodeData.set([node.min[0],node.min[1],node.min[2],node.left,
+                  node.max[0],node.max[1],node.max[2],node.right,
+                  node.start,node.count,node.leaf?1:0,node.escape],offset);
+  }
+  return {nodes,triangleData,nodeData,triangleHeight,nodeHeight,width};
+}
+
+$('stlFile').addEventListener('change',async e=>{
+  const file=e.target.files&&e.target.files[0];
+  if(!file) return;
+  modelStatus.textContent='Loading '+file.name+'…';
+  try{
+    if(!objFloatTexture) throw new Error('This browser cannot upload float textures for ray-traced STL rendering.');
+    const parsed=parseStl(await file.arrayBuffer());
+    const maxTextureSize=gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const width=Math.min(256,maxTextureSize);
+    const bvh=buildStlBvh(parsed,width);
+    if(bvh.triangleHeight>maxTextureSize||bvh.nodeHeight>maxTextureSize)
+      throw new Error('This STL exceeds the GPU texture size supported by this browser.');
+    if(!objFloatTexture) throw new Error('This browser cannot upload float textures for ray-traced STL rendering.');
+    gl.bindTexture(gl.TEXTURE_2D,objTexture);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,width,bvh.triangleHeight,0,gl.RGBA,gl.FLOAT,bvh.triangleData);
+    gl.bindTexture(gl.TEXTURE_2D,objNodeTexture);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,width,bvh.nodeHeight,0,gl.RGBA,gl.FLOAT,bvh.nodeData);
+    const uploadError=gl.getError();
+    if(uploadError!==gl.NO_ERROR) throw new Error('WebGL could not upload this STL to the ray tracer.');
+    objTriangleCount=parsed.triangles;
+    objNodeCount=bvh.nodes.length;
+    objTextureWidth=width; objTextureHeight=bvh.triangleHeight;
+    objNodeTextureWidth=width; objNodeTextureHeight=bvh.nodeHeight;
+    objBoundsMin=parsed.min; objBoundsMax=parsed.max;
+    modelStatus.textContent=file.name+' · '+parsed.triangles.toLocaleString()+' triangles';
+  }catch(err){
+    modelStatus.textContent=err.message;
+  }
+});
+$('modelPosition').addEventListener('input',e=>{
+  modelL=+e.target.value;
+  updateModelPositionReadout();
+});
+const ROOM = 5.0, ROOM_LENGTH=15.0;
+let THROAT = 0.5;                 // aperture radius in metres, follows n
+let n = +$('n_sl').value;
+let fov = +$('fov_sl').value;
+let gridThickness = +$('g_sl').value;
+function signedMetres(value){return (value<0?'−':'')+Math.abs(value).toFixed(2)+' m';}
+function updateModelPositionReadout(){
+  const value=$('modelPositionValue');
+  if(Math.abs(modelL)<0.025){
+    const throatRadius=n;
+    value.textContent='z '+signedMetres(-10+throatRadius)+' / '+signedMetres(10+throatRadius)+' · l 0.00 m (throat)';
+    return;
+  }
+  const chartCenter=modelL<0?-10:10;
+  const roomZ=chartCenter+Math.sqrt(modelL*modelL+n*n);
+  value.textContent='z '+signedMetres(roomZ)+' · l '+signedMetres(modelL)+' ('+(modelL<0?'red':'blue')+' chart)';
+}
+function updateModelPositionBounds(){
+  const limit=Math.sqrt(Math.max(0,4.65*4.65-n*n));
+  const slider=$('modelPosition');
+  slider.min=(-limit).toFixed(2);
+  slider.max=limit.toFixed(2);
+  if(Math.abs(modelL)>limit){
+    modelL=Math.sign(modelL)*limit;
+    slider.value=modelL;
+  }
+  updateModelPositionReadout();
+}
+
+$('n_sl').oninput = e => {
+  n=+e.target.value;
+  // the slider is the throat scale: it sets the aperture radius, so the hole
+  // you see and fly through actually grows and shrinks with it
+  THROAT = n;
+  updateModelPositionBounds();
+  updateModelPositionReadout();
+  $('av').textContent = n.toFixed(2)+' m';
+};
+$('fov_sl').oninput= e => { fov=+e.target.value; $('fv').textContent=fov; };
+$('g_sl').oninput  = e => { gridThickness=+e.target.value; $('gv').textContent=gridThickness.toFixed(3); };
+
+// Camera navigation uses the displayed room chart. Every light ray uses the
+// full Ellis geodesic; crossing an aperture changes the camera to the paired
+// mouth in the room chart.
+const cam = {p:[0,0,0], chartSide:0, yaw:0, pitch:0};
+function reset(){
+  cam.p=[0,0,0];
+  cam.chartSide=0;
+  cam.yaw=0; cam.pitch=0; clampCam();
+}
+clampCam();
+$('n_sl').oninput({target:$('n_sl')});
+$('g_sl').oninput({target:$('g_sl')});
+
+function camFrame(){
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const f = [Math.sin(cam.yaw)*cp, sp, -Math.cos(cam.yaw)*cp];
+  let r = [-f[2], 0, f[0]];
+  const rl = Math.hypot(r[0], r[2]);
+  if(rl < 1e-5) r = [1,0,0]; else { r[0]/=rl; r[2]/=rl; }
+  const u = [ r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0] ];
+  return {f:f, r:r, u:u};
+}
+
+// Keep the camera inside the displayed room.
+function clampCam(){
+  const L = ROOM - 0.35;
+  cam.p[0]=Math.max(-L,Math.min(L,cam.p[0]));
+  cam.p[1]=Math.max(-L,Math.min(L,cam.p[1]));
+  cam.p[2]=Math.max(-ROOM_LENGTH+0.35,Math.min(ROOM_LENGTH-0.35,cam.p[2]));
+}
+
+$('toggle').onclick = () => {
+  const p = $('panel');
+  p.classList.toggle('min');
+  $('toggle').setAttribute('aria-expanded', String(!p.classList.contains('min')));
+};
+
+// Collapsible slider section: remember the open/closed state across reloads and
+// keep the panel's show/hide button and aria state in sync.
+(() => {
+  const det = $('sliders'), tg = $('toggle');
+  const KEY = 'ellis.sliders';
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved !== null) det.open = saved === '1';
+  } catch (_) {}
+  det.addEventListener('toggle', () => {
+    try { localStorage.setItem(KEY, det.open ? '1' : '0'); } catch (_) {}
+  });
+  tg.setAttribute('aria-expanded', String(!$('panel').classList.contains('min')));
+})();
+
+$('infoBtn').onclick = () => {
+  const box=$('infoBox'), open=box.hidden;
+  box.hidden=!open;
+  $('infoBtn').setAttribute('aria-expanded',String(open));
+};
+$('infoClose').onclick = () => {
+  $('infoBox').hidden=true;
+  $('infoBtn').setAttribute('aria-expanded','false');
+};
+
+// Drag the panel by its title, in case browser chrome covers more than the
+// CSS offset assumes. Position persists across reloads.
+(() => {
+  const p = $('panel'), t = $('ptitle');
+  const KEY = 'ellis.panel';
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved) { p.style.left = saved.l; p.style.top = saved.t; p.style.right = 'auto'; }
+  } catch (_) {}
+  let dx = 0, dy = 0, dragging = false;
+  t.style.cursor = 'grab';
+  t.addEventListener('pointerdown', e => {
+    dragging = true; t.setPointerCapture(e.pointerId);
+    const r = p.getBoundingClientRect();
+    dx = e.clientX - r.left; dy = e.clientY - r.top;
+    t.style.cursor = 'grabbing';
+  });
+  t.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    p.style.left = Math.max(0, e.clientX - dx) + 'px';
+    p.style.top  = Math.max(0, e.clientY - dy) + 'px';
+    p.style.right = 'auto';
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; t.style.cursor = 'grab';
+    try { localStorage.setItem(KEY, JSON.stringify({l:p.style.left, t:p.style.top})); } catch (_) {}
+  };
+  t.addEventListener('pointerup', end);
+  t.addEventListener('pointercancel', end);
+})();
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if(k === 'r') reset();
+  if(k === 'c'){
+    cam.p=[0,0,cam.p[2]<0?10-(n+2):-10+(n+2)];
+    cam.chartSide=cam.p[2]>0?1:0;
+  }
+  $('panel').classList.remove('min');
+});
+
+// Mouse look: hold the left mouse button and move to look around.
+// The normal pointer remains visible; no pointer lock and no Escape required.
+let dragging=false, lastX=0, lastY=0;
+canvas.style.cursor='grab';
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return; // left mouse button only
+  dragging=true; lastX=e.clientX; lastY=e.clientY;
+  canvas.style.cursor='grabbing';
+  if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+});
+const stopLooking = () => {
+  dragging=false;
+  canvas.style.cursor='grab';
+};
+canvas.addEventListener('pointerup', stopLooking);
+canvas.addEventListener('pointercancel', stopLooking);
+canvas.addEventListener('lostpointercapture', stopLooking);
+canvas.addEventListener('pointermove', e => {
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  lastX=e.clientX; lastY=e.clientY;
+  cam.yaw   -= dx*0.005;
+  cam.pitch += dy*0.005;
+  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch));
+});
+
+// keys
+const held = {};
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  held[k] = true;
+  // stop the arrows from scrolling the page
+  if(k.indexOf('arrow') === 0 || k === ' ') e.preventDefault();
+});
+window.addEventListener('keyup',   e => held[e.key.toLowerCase()]=false);
+window.addEventListener('blur',    () => Object.keys(held).forEach(k=>held[k]=false));
+
+// Entering a mouth sphere (r < a about either mouth centre) emerges from the
+// other sphere at the same angular position, heading outward. The radial part
+// of the view direction flips, exactly as the ray tracer's throat crossing does.
+function crossMouths(){
+  for(const cz of [-10,10]){
+    const dx=cam.p[0], dy=cam.p[1], dz=cam.p[2]-cz;
+    const r=Math.hypot(dx,dy,dz);
+    if(r>=n) continue;
+    const N = r>1e-6 ? [dx/r,dy/r,dz/r] : [0,0,cz<0?1:-1];
+    const newR=2*n-r;
+    cam.p=[N[0]*newR, N[1]*newR, -cz+N[2]*newR];
+    const f=camFrame().f, dn=f[0]*N[0]+f[1]*N[1]+f[2]*N[2];
+    const g=f.map((v,i)=>v-2*dn*N[i]);
+    cam.pitch=Math.max(-1.5,Math.min(1.5,Math.asin(Math.max(-1,Math.min(1,g[1])))));
+    cam.yaw=Math.atan2(g[0],-g[2]);
+    cam.chartSide=cam.p[2]>0?1:0;
+    return;
+  }
+}
+
+function fly(dt){
+  const speed = (held['shift']?14:4.5)*dt;
+  let fw=0, sd=0, vt=0;
+  if(held['w'])               fw+=1;     // W forward
+  if(held['s'])               fw-=1;     // S reverse
+  if(held['d']||held['arrowright']) sd+=1;
+  if(held['a']||held['arrowleft'])  sd-=1;
+  if(held['arrowup'])         vt+=1;     // up arrow   -> up
+  if(held['arrowdown'])       vt-=1;     // down arrow -> down
+  if(held[' '])               vt+=1;
+  if(held['control'])         vt-=1;
+  if(!fw && !sd && !vt) return;
+  // Move in the ordinary room chart and map positions only at an aperture.
+  const inputMag=Math.hypot(fw,sd,vt);
+  const totalDistance=speed*inputMag;
+  const count=Math.max(1,Math.ceil(totalDistance/0.04));
+  const stepSpeed=speed/count;
+  for(let step=0;step<count;step++){
+    const F=camFrame();
+    const norm= inputMag>1 ? 1/inputMag : 1;
+    const move=[0,1,2].map(i=>norm*(fw*F.f[i]+sd*F.r[i]+vt*F.u[i]));
+    const old=cam.p.slice();
+    cam.p=cam.p.map((v,i)=>v+move[i]*stepSpeed);
+    crossMouths();
+    clampCam();
+  }
+}
+
+function norm3(a){const l=Math.hypot(...a)||1;return a.map(v=>v/l);}
+
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now;
+  fly(dt);
+  crossMouths();
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.uniform2f(U.u_res, canvas.width, canvas.height);
+  gl.uniform3f(U.u_cam, cam.p[0], cam.p[1], cam.p[2]);
+  gl.uniform1f(U.u_yaw, cam.yaw);
+  gl.uniform1f(U.u_pitch, cam.pitch);
+  gl.uniform1f(U.u_fov, fov*Math.PI/180);
+  gl.uniform1f(U.u_n, n);
+  gl.uniform1f(U.u_chartSide,cam.chartSide);
+  gl.uniform1f(U.u_grid, gridThickness);
+  // Keep the object's local orientation continuous across the throat.
+  const modelTurn=0.0;
+  gl.uniform1f(U.u_objEnabled,objTriangleCount>0?1:0);
+  gl.uniform1f(U.u_objL,modelL);
+  gl.uniform1f(U.u_objScale,0.5);
+  gl.uniform1f(U.u_objTurn,modelTurn);
+  gl.uniform1f(U.u_objTriCount,objTriangleCount);
+  gl.uniform1f(U.u_objNodeCount,objNodeCount);
+  gl.uniform2f(U.u_objTexSize,objTextureWidth,objTextureHeight);
+  gl.uniform2f(U.u_objNodeTexSize,objNodeTextureWidth,objNodeTextureHeight);
+  gl.uniform3f(U.u_objMin,...objBoundsMin);
+  gl.uniform3f(U.u_objMax,...objBoundsMax);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D,objTexture);
+  gl.uniform1i(U.u_objMesh,0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D,objNodeTexture);
+  gl.uniform1i(U.u_objNodes,1);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  const worldZ=cam.p[2];
+  const room=worldZ < -5.0?'RED':worldZ < 5.0?'GREEN':'BLUE';
+  document.getElementById('hud').textContent =
+    'x  ' + cam.p[0].toFixed(2) + ' m\n' +
+    'y  ' + cam.p[1].toFixed(2) + ' m\n' +
+    'z  ' + worldZ.toFixed(2) + ' m\n' +
+    'mouths  −10 ↔ +10 m\n' +
+    'room ' + room;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
